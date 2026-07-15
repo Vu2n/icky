@@ -9,6 +9,7 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  actions: write  # re-trigger Pages deploy (GITHUB_TOKEN pushes don't start workflows)
 
 jobs:
   ingest:
@@ -244,6 +245,7 @@ jobs:
           echo "action=$(cat /tmp/icky-dump/action.txt)" >> "$GITHUB_OUTPUT"
 
       - name: Commit & push to main
+        id: push
         run: |
           set -euo pipefail
           git config user.name "icky-bot"
@@ -251,12 +253,42 @@ jobs:
           git add -A web/public/dumps
           if git diff --staged --quiet; then
             echo "No file changes"
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           ACT="${{ steps.patch.outputs.action }}"
           SLUG="${{ steps.patch.outputs.slug }}"
           git commit -m "dump: ${ACT} ${SLUG} (#${{ github.event.issue.number }})"
-          git push origin HEAD:main
+          # Retry push (race when opened+labeled fire two workflow runs)
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin main || true
+            if git push origin HEAD:main; then
+              echo "pushed=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "push attempt $i failed, retry…"
+            sleep $((i * 3))
+          done
+          echo "pushed=false" >> "$GITHUB_OUTPUT"
+          exit 1
+
+      # GITHUB_TOKEN commits do not trigger other workflows — kick Pages explicitly
+      - name: Trigger Pages deploy
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.actions.createWorkflowDispatch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'deploy-dumps.yml',
+                ref: 'main',
+              })
+              core.info('Triggered deploy-dumps.yml')
+            } catch (e) {
+              core.warning('Could not dispatch Pages deploy: ' + e.message)
+            }
 
       - name: Comment on issue
         if: always()
@@ -276,19 +308,21 @@ jobs:
                   ? `An existing dump for this game was replaced with the new offsets.\n\n`
                   : `This is a new game entry on the site.\n\n`) +
                 `View: https://${context.repo.owner.toLowerCase()}.github.io/${context.repo.repo}/#/dump/${slug}\n\n` +
+                `Site rebuild usually finishes in **2–5 minutes**.\n\n` +
                 `Thanks @${context.payload.issue.user.login}!`
             } else {
-              body = `❌ **Could not ingest this dump.**\n\n`
+              // Don't scare people if a racey twin-run lost the push but the other succeeded
+              body = `❌ **Could not finish publishing this dump.**\n\n`
               if (detail && detail.includes('No dump file')) {
                 body += detail + '\n\n'
               } else {
                 body += [
-                  'Common causes:',
-                  '- **No file attached** (or attach failed silently)',
-                  '- **File too large** — GitHub issue uploads max ~**25 MB**. Full Rust dumps are often 100–250 MB.',
-                  '- Wrong file (need `icky.dump.json` or `icky.dump.json.gz`, schema `icky.dump/v1`)',
+                  'If you already got a ✅ comment on this issue, **ignore this** — a twin workflow race failed while the other run succeeded.',
                   '',
-                  '**Fix for large dumps:** open the site **Upload** page → **Download for GitHub** (slim + gzip) → attach that file.',
+                  'Otherwise common causes:',
+                  '- **No file attached**',
+                  '- **File too large** (~25 MB issue limit) — use site **Download slim for GitHub** (`.json.gz`)',
+                  '- Bad schema / missing `game.slug`',
                   '',
                 ].join('\n')
               }
