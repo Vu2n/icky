@@ -13,7 +13,8 @@ body:
         2. **Drag that file into this issue** (GitHub will attach it)
         3. Fill the fields below and submit
 
-        A bot will validate the dump and open a pull request for the catalog.
+        This site hosts **one game only**. Your dump **replaces** whatever is currently live
+        (same game = update offsets; different game = switch the live title).
   - type: input
     id: game
     attributes:

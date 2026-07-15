@@ -97,6 +97,8 @@ export interface CatalogEntry {
 
 export interface Catalog {
   schema: string
-  updated_at: string
+  /** single-game = catalog.dumps length is 0 or 1; uploads replace the live dump */
+  mode?: 'single-game' | string
+  updated_at: string | null
   dumps: CatalogEntry[]
 }

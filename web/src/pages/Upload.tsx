@@ -90,8 +90,9 @@ export function Upload() {
       </div>
       <h1 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">Share a dump</h1>
       <p className="mt-3 max-w-xl text-muted">
-        Drop your <code className="text-accent">icky.dump.json</code> (or the whole dump folder). We
-        validate it here, then you attach it to a GitHub issue — a bot opens the PR for the catalog.
+        This site holds <strong className="text-text">one live game</strong>. Drop your{' '}
+        <code className="text-accent">icky.dump.json</code> — publishing <strong className="text-text">replaces</strong>{' '}
+        whatever is currently on the catalog (updates included).
       </p>
 
       {/* Steps */}
@@ -242,11 +243,12 @@ export function Upload() {
                 <Paperclip className="mt-0.5 shrink-0 text-accent" size={22} />
                 <div className="min-w-0 flex-1">
                   <p className="font-display text-lg font-semibold text-text">
-                    Publish to the public catalog
+                    Publish / update live dump
                   </p>
                   <p className="mt-1 text-sm text-muted">
-                    One click downloads <code className="text-accent">icky.dump.json</code> and opens
-                    a GitHub issue. Drag the file onto the issue, hit Submit — we open the PR.
+                    Downloads <code className="text-accent">icky.dump.json</code> and opens a GitHub
+                    issue. Attach the file and submit — the bot replaces the single dump on the site
+                    (no multi-game catalog).
                   </p>
                   {tooBigForIssue && (
                     <p className="mt-2 text-xs text-amber-300/90">

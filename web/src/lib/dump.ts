@@ -50,9 +50,8 @@ export function loadLocalDumps(): IckyDump[] {
 }
 
 export function saveLocalDump(dump: IckyDump): void {
-  const list = loadLocalDumps().filter((d) => d.game.slug !== dump.game.slug)
-  list.unshift(dump)
-  localStorage.setItem(LOCAL_KEY, JSON.stringify(list.slice(0, 20)))
+  // Single-game site: browser library keeps only the latest dump
+  localStorage.setItem(LOCAL_KEY, JSON.stringify([dump]))
 }
 
 export function removeLocalDump(slug: string): void {

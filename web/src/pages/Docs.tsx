@@ -38,6 +38,12 @@ export function Docs() {
     ...`}
         </pre>
 
+        <h2 className="pt-4 font-display text-lg font-semibold text-text">Single-game catalog</h2>
+        <p>
+          The public site always has <strong className="text-text">0 or 1</strong> dump. Publishing
+          wipes the previous game folder and writes the new one, then deploys.
+        </p>
+
         <h2 className="pt-4 font-display text-lg font-semibold text-text">Easiest publish path</h2>
         <ol className="list-decimal space-y-1 pl-5">
           <li>
@@ -47,7 +53,7 @@ export function Docs() {
           <li>
             Click <strong className="text-text">Download &amp; open issue</strong>
           </li>
-          <li>Drag the file onto the GitHub issue and submit — a bot opens the catalog PR</li>
+          <li>Drag the file onto the GitHub issue and submit — bot replaces the live dump</li>
         </ol>
 
         <h2 className="pt-4 font-display text-lg font-semibold text-text">Full docs</h2>

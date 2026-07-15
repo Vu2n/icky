@@ -1,5 +1,4 @@
-# When someone opens an issue labeled dump-submission with an attached
-# icky.dump.json, validate it and open a PR that updates the catalog.
+# Single-game catalog: each valid dump submission REPLACES the dump on the site.
 name: Process dump submission
 
 on:
@@ -27,7 +26,6 @@ jobs:
         with:
           script: |
             const body = context.payload.issue.body || ''
-            // Matches markdown links to github user-attachments / assets
             const patterns = [
               /https:\/\/github\.com\/user-attachments\/files\/\d+\/[^\s)"']+/g,
               /https:\/\/github\.com\/[\w-]+\/[\w.-]+\/files\/\d+\/[^\s)"']+/g,
@@ -41,12 +39,12 @@ jobs:
               core.setFailed('No dump attachment found. Attach icky.dump.json to the issue.')
               return
             }
-            // Prefer json-looking attachment
-            const jsonish = (body.match(patterns[0]) || []).find(u => /\.json($|\?)/i.test(u))
+            const all = body.match(patterns[0]) || []
+            const jsonish = all.find(u => /\.json($|\?)/i.test(u))
             core.setOutput('url', jsonish || url)
             core.info('Attachment: ' + (jsonish || url))
 
-      - name: Download dump
+      - name: Download & validate dump
         env:
           ATTACH_URL: ${{ steps.attach.outputs.url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -55,13 +53,8 @@ jobs:
           mkdir -p /tmp/icky-dump
           curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/octet-stream" \
-            -L "$ATTACH_URL" -o /tmp/icky-dump/raw.bin
-          # Some attachments are served as octet-stream without .json name
-          file /tmp/icky-dump/raw.bin || true
-          head -c 200 /tmp/icky-dump/raw.bin
-          # Try as JSON; if HTML error page, fail
-          if head -c 1 /tmp/icky-dump/raw.bin | grep -q '<'; then
-            echo "Download looks like HTML — retry without Accept override"
+            -L "$ATTACH_URL" -o /tmp/icky-dump/raw.bin || true
+          if ! head -c 1 /tmp/icky-dump/raw.bin | grep -q '{'; then
             curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -L "$ATTACH_URL" -o /tmp/icky-dump/raw.bin
           fi
           python3 - <<'PY'
@@ -69,12 +62,10 @@ jobs:
           p="/tmp/icky-dump/raw.bin"
           with open(p,"rb") as f:
               data=f.read()
-          # strip BOM
           if data.startswith(b"\xef\xbb\xbf"):
               data=data[3:]
           try:
-              text=data.decode("utf-8")
-              dump=json.loads(text)
+              dump=json.loads(data.decode("utf-8"))
           except Exception as e:
               print("JSON parse failed:", e)
               sys.exit(1)
@@ -82,8 +73,8 @@ jobs:
               print("Bad schema:", dump.get("schema"))
               sys.exit(1)
           game=dump.get("game") or {}
-          slug=game.get("slug") or "unknown"
-          if not slug or slug=="unknown":
+          slug=(game.get("slug") or "").strip()
+          if not slug:
               print("Missing game.slug")
               sys.exit(1)
           with open("/tmp/icky-dump/dump.json","w",encoding="utf-8") as f:
@@ -103,23 +94,25 @@ jobs:
           print("OK slug=", slug, "types=", (dump.get("stats") or {}).get("types"))
           PY
 
-      - name: Update catalog tree
+      - name: Replace single-game catalog
         id: patch
         run: |
           set -euo pipefail
           SLUG=$(python3 -c "import json;print(json.load(open('/tmp/icky-dump/meta.json'))['slug'])")
+          GAME=$(python3 -c "import json;print(json.load(open('/tmp/icky-dump/meta.json'))['game'])")
           echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
+          echo "game=$GAME" >> "$GITHUB_OUTPUT"
+
+          # Wipe every previous dump folder — only one game lives on the site
+          rm -rf web/public/dumps
           mkdir -p "web/public/dumps/$SLUG"
           cp /tmp/icky-dump/dump.json "web/public/dumps/$SLUG/dump.json"
+
           python3 - <<'PY'
           import json
           from pathlib import Path
+          from datetime import datetime, timezone
           meta=json.load(open("/tmp/icky-dump/meta.json"))
-          cat_path=Path("web/public/dumps/catalog.json")
-          if cat_path.exists():
-              cat=json.loads(cat_path.read_text(encoding="utf-8"))
-          else:
-              cat={"schema":"icky.catalog/v1","updated_at":"","dumps":[]}
           entry={
             "slug": meta["slug"],
             "game": meta["game"],
@@ -135,36 +128,33 @@ jobs:
               "packages": meta.get("stats",{}).get("packages"),
             },
             "path": f"dumps/{meta['slug']}/dump.json",
-            "featured": False,
-            "tags": [meta["engine"], meta["mode"], "community"],
+            "featured": True,
+            "tags": [meta["engine"], meta["mode"], "current"],
           }
-          dumps=cat.get("dumps") or []
-          dumps=[d for d in dumps if d.get("slug")!=meta["slug"]]
-          dumps.insert(0, entry)
-          cat["dumps"]=dumps
-          from datetime import datetime, timezone
-          cat["updated_at"]=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-          cat["schema"]="icky.catalog/v1"
-          cat_path.write_text(json.dumps(cat, indent=2)+"\n", encoding="utf-8")
-          print("catalog entries", len(dumps))
+          cat={
+            "schema": "icky.catalog/v1",
+            "mode": "single-game",
+            "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "dumps": [entry],  # exactly one
+          }
+          Path("web/public/dumps/catalog.json").write_text(
+              json.dumps(cat, indent=2) + "\n", encoding="utf-8"
+          )
+          print("catalog set to single game:", meta["slug"])
           PY
 
-      - name: Create pull request
-        uses: peter-evans/create-pull-request@v6
-        with:
-          commit-message: "dump: add ${{ steps.patch.outputs.slug }} from #${{ github.event.issue.number }}"
-          title: "Dump: ${{ steps.patch.outputs.slug }}"
-          body: |
-            Automated ingest from community issue #${{ github.event.issue.number }}.
-
-            - Game slug: `${{ steps.patch.outputs.slug }}`
-            - Submitted by: @${{ github.event.issue.user.login }}
-
-            Please review offsets before merge.
-          branch: dump/${{ steps.patch.outputs.slug }}-${{ github.event.issue.number }}
-          labels: dump-submission
-          add-paths: |
-            web/public/dumps/**
+      - name: Commit & push to main
+        run: |
+          set -euo pipefail
+          git config user.name "icky-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A web/public/dumps
+          if git diff --staged --quiet; then
+            echo "No file changes"
+            exit 0
+          fi
+          git commit -m "dump: set current game to ${{ steps.patch.outputs.slug }} (#${{ github.event.issue.number }})"
+          git push origin HEAD:main
 
       - name: Comment on issue
         if: always()
@@ -172,11 +162,17 @@ jobs:
         with:
           script: |
             const outcome = '${{ job.status }}'
+            const slug = '${{ steps.patch.outputs.slug }}'
+            const game = '${{ steps.patch.outputs.game }}'
             let body
             if (outcome === 'success') {
-              body = `✅ Dump validated and a pull request was opened to add it to the catalog.\n\nThanks @${context.payload.issue.user.login}!`
+              body = `✅ **${game || slug || 'Dump'}** is now the live dump on the site (replaces any previous game).\n\n` +
+                `Catalog: https://${context.repo.owner.toLowerCase()}.github.io/${context.repo.repo}/#/dumps\n\n` +
+                `Thanks @${context.payload.issue.user.login}!`
             } else {
-              body = `❌ Could not ingest this dump automatically.\n\nCommon fixes:\n- Attach \`icky.dump.json\` (schema \`icky.dump/v1\`) directly to the issue\n- Re-dump with a recent Icky build\n\nSee the [workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions) for logs.`
+              body = `❌ Could not update the live dump.\n\n` +
+                `Attach \`icky.dump.json\` (schema \`icky.dump/v1\`) and try again.\n` +
+                `Logs: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions`
             }
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -184,3 +180,12 @@ jobs:
               issue_number: context.issue.number,
               body
             })
+            if (outcome === 'success') {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                state: 'closed',
+                labels: ['dump-submission', 'published']
+              })
+            }
