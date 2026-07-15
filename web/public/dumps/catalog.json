@@ -1,7 +1,33 @@
 {
   "schema": "icky.catalog/v1",
-  "updated_at": "2026-07-15T13:47:37Z",
+  "updated_at": "2026-07-15T14:57:23Z",
   "dumps": [
+    {
+      "slug": "rustclient",
+      "game": "RustClient",
+      "executable": "RustClient.exe",
+      "engine": "il2cpp",
+      "engine_label": "Unity IL2CPP",
+      "mode": "external",
+      "generated_at": "2026-07-15T14:50:10Z",
+      "stats": {
+        "types": 15709,
+        "classes": 11230,
+        "globals": 32,
+        "packages": 194,
+        "encrypted_fields": 7977,
+        "encrypted_with_decrypt": 79
+      },
+      "path": "dumps/rustclient/dump.json",
+      "featured": false,
+      "tags": [
+        "il2cpp",
+        "external",
+        "community",
+        "encrypted",
+        "decrypt"
+      ]
+    },
     {
       "slug": "avf2",
       "game": "AVF2",
