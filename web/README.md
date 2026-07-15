@@ -44,3 +44,6 @@ No backend is required for GitHub Pages.
 ## Schema
 
 See `../docs/DUMP_FORMAT.md`.
+
+<!-- deploy 2026-07-15T16:01:09.3729725+01:00 -->
+
