@@ -1,5 +1,4 @@
 #include "menu.h"
-#include "engine/engine_iface.h"
 #include "core/logger.h"
 #include "core/modules.h"
 #include "core/fsutil.h"
@@ -7,159 +6,163 @@
 #include <icky/icky.h>
 
 #include <Windows.h>
-#include <iostream>
 #include <string>
 #include <cstdio>
+#include <cstdlib>
 
 namespace icky {
 namespace {
 
-void set_color(WORD c) {
-    SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), c);
-}
+bool g_console_owned = false;
 
-void banner() {
-    SetConsoleOutputCP(CP_UTF8);
-    SetConsoleCP(CP_UTF8);
-    set_color(FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-    std::printf("\n");
-    std::printf("  ========================================\n");
-    std::printf("   I C K Y  - multi-engine SDK dumper\n");
-    std::printf("  ========================================\n");
-    set_color(FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-    std::printf("                    v%s\n", "1.0.0");
-    set_color(FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-    std::printf("  Process : %s\n", process_name().c_str());
-    std::printf("  DLL dir : %s\n\n", dll_directory().c_str());
+void set_color(WORD c) {
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (h && h != INVALID_HANDLE_VALUE)
+        SetConsoleTextAttribute(h, c);
 }
 
 int read_choice(int min_v, int max_v, int default_v) {
-    std::printf("  > ");
-    std::fflush(stdout);
-    std::string line;
-    if (!std::getline(std::cin, line))
+    step_log("awaiting input");
+    printf("  > ");
+    fflush(stdout);
+
+    HANDLE hin = GetStdHandle(STD_INPUT_HANDLE);
+    if (!hin || hin == INVALID_HANDLE_VALUE)
         return default_v;
-    if (line.empty())
+
+    // Line read via ReadConsole (more reliable than fgets after freopen under inject)
+    char buf[64]{};
+    DWORD read = 0;
+    if (!ReadConsoleA(hin, buf, sizeof(buf) - 1, &read, nullptr) || read == 0)
         return default_v;
-    try {
-        int v = std::stoi(line);
-        if (v < min_v || v > max_v) return default_v;
-        return v;
-    } catch (...) {
-        return default_v;
+    buf[read] = 0;
+    // strip CR/LF
+    for (DWORD i = 0; i < read; ++i)
+        if (buf[i] == '\r' || buf[i] == '\n') { buf[i] = 0; break; }
+    if (!buf[0]) return default_v;
+    int v = atoi(buf);
+    if (v < min_v || v > max_v) return default_v;
+    return v;
+}
+
+icky_engine soft_detect(char* detail, size_t detail_n) {
+    if (detail && detail_n) detail[0] = 0;
+    if (GetModuleHandleA("GameAssembly.dll")) {
+        if (detail) strcpy_s(detail, detail_n, "GameAssembly.dll");
+        return ICKY_ENGINE_IL2CPP;
     }
+    if (GetModuleHandleA("mono-2.0-bdwgc.dll") || GetModuleHandleA("mono.dll")) {
+        if (detail) strcpy_s(detail, detail_n, "mono");
+        return ICKY_ENGINE_MONO;
+    }
+    if (GetModuleHandleA("engine2.dll")) {
+        if (detail) strcpy_s(detail, detail_n, "engine2");
+        return ICKY_ENGINE_SOURCE2;
+    }
+    if (GetModuleHandleA("client.dll") && GetModuleHandleA("engine.dll")) {
+        if (detail) strcpy_s(detail, detail_n, "client+engine");
+        return ICKY_ENGINE_SOURCE1;
+    }
+    return ICKY_ENGINE_UNKNOWN;
 }
 
 } // namespace
 
 bool alloc_console() {
-    if (!AllocConsole()) {
-        // Already has console
-        freopen("CONOUT$", "w", stdout);
-        freopen("CONOUT$", "w", stderr);
-        freopen("CONIN$", "r", stdin);
-        return true;
+    if (!GetConsoleWindow()) {
+        if (!AllocConsole())
+            return false;
+        g_console_owned = true;
     }
-    SetConsoleTitleA("Icky — multi-engine SDK dumper");
-    freopen("CONOUT$", "w", stdout);
-    freopen("CONOUT$", "w", stderr);
-    freopen("CONIN$", "r", stdin);
-    // Larger buffer
-    COORD size{120, 3000};
-    SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE), size);
+    SetConsoleTitleA("Icky");
+
+    // Attach std handles without freopen first — freopen can crash some hosts
+    FILE* f = nullptr;
+    freopen_s(&f, "CONOUT$", "w", stdout);
+    freopen_s(&f, "CONOUT$", "w", stderr);
+    freopen_s(&f, "CONIN$", "r", stdin);
+
+    // Also force Win32 standard handles
+    SetStdHandle(STD_OUTPUT_HANDLE, CreateFileA("CONOUT$", GENERIC_READ | GENERIC_WRITE,
+                                               FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                               OPEN_EXISTING, 0, nullptr));
+    SetStdHandle(STD_INPUT_HANDLE, CreateFileA("CONIN$", GENERIC_READ | GENERIC_WRITE,
+                                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                              OPEN_EXISTING, 0, nullptr));
     return true;
 }
 
 void free_console() {
-    fclose(stdout);
-    FreeConsole();
+    if (g_console_owned) {
+        FreeConsole();
+        g_console_owned = false;
+    }
 }
 
 UserChoices run_console_menu() {
     UserChoices c;
-    banner();
+    step_log("menu: enter");
 
-    ILOG_I("Scanning modules for engine signatures...");
-    DetectResult det{};
-    icky_engine auto_eng = detect_best_engine(&det);
+    char detail[128]{};
+    step_log("menu: soft_detect");
+    icky_engine auto_eng = soft_detect(detail, sizeof(detail));
+    step_log("menu: soft_detect done");
 
-    set_color(FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-    if (auto_eng != ICKY_ENGINE_UNKNOWN) {
-        std::printf("  [AUTO] Detected: %s\n", icky_engine_name(auto_eng));
-        std::printf("         %s (confidence %.0f%%)\n",
-                    det.detail.c_str(), det.confidence * 100.f);
-        if (det.primary.base)
-            std::printf("         module %s @ 0x%llX\n",
-                        det.primary.name.c_str(),
-                        (unsigned long long)det.primary.base);
-    } else {
-        set_color(FOREGROUND_RED | FOREGROUND_INTENSITY);
-        std::printf("  [AUTO] No engine confidently detected.\n");
-    }
+    set_color(FOREGROUND_GREEN | FOREGROUND_RED | FOREGROUND_INTENSITY);
+    printf("\n  ICKY dumper\n\n");
     set_color(FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
 
-    std::printf("\n  Select engine:\n");
-    {
-        std::string auto_label = "    [0] Auto-detect";
-        if (auto_eng != ICKY_ENGINE_UNKNOWN) {
-            auto_label += " (";
-            auto_label += icky_engine_name(auto_eng);
-            auto_label += ")";
-        }
-        std::printf("%s\n", auto_label.c_str());
-    }
-    std::printf("    [1] Unreal Engine\n");
-    std::printf("    [2] IL2CPP (Unity)\n");
-    std::printf("    [3] Mono (Unity)\n");
-    std::printf("    [4] Source 1 (CS:GO / classic)\n");
-    std::printf("    [5] Source 2 (CS2 / Deadlock)\n");
-    std::printf("    [9] Cancel\n");
+    if (auto_eng != ICKY_ENGINE_UNKNOWN)
+        printf("  Auto: %s (%s)\n", icky_engine_name(auto_eng), detail);
+    else
+        printf("  Auto: none — pick manually\n");
 
-    int eng_choice = read_choice(0, 9, 0);
-    if (eng_choice == 9) {
+    printf("\n  Engine:\n");
+    printf("    [0] Auto\n");
+    printf("    [1] Unreal\n");
+    printf("    [2] IL2CPP (Rust/Unity)\n");
+    printf("    [3] Mono\n");
+    printf("    [4] Source1\n");
+    printf("    [5] Source2\n");
+    printf("    [9] Cancel\n");
+
+    int eng = read_choice(0, 9, auto_eng == ICKY_ENGINE_IL2CPP ? 2 : 0);
+    step_log("menu: engine chosen");
+    if (eng == 9) {
         c.cancelled = true;
         return c;
     }
-    switch (eng_choice) {
+    switch (eng) {
     case 1: c.engine = ICKY_ENGINE_UNREAL; break;
     case 2: c.engine = ICKY_ENGINE_IL2CPP; break;
     case 3: c.engine = ICKY_ENGINE_MONO; break;
     case 4: c.engine = ICKY_ENGINE_SOURCE1; break;
     case 5: c.engine = ICKY_ENGINE_SOURCE2; break;
-    default: c.engine = ICKY_ENGINE_UNKNOWN; break;
+    default: c.engine = auto_eng != ICKY_ENGINE_UNKNOWN ? auto_eng : ICKY_ENGINE_IL2CPP; break;
     }
 
-    std::printf("\n  SDK type (this is the important one):\n");
-    set_color(FOREGROUND_GREEN | FOREGROUND_RED | FOREGROUND_INTENSITY);
-    std::printf("    [1] Internal  - inject/same-process headers (absolute + RVA helpers)\n");
-    std::printf("    [2] External  - RPM/out-of-process headers (RVA-only offsets)\n");
-    set_color(FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-    std::printf("    [3] Both      - generate internal and external trees\n");
+    printf("\n  Mode:\n");
+    printf("    [1] Internal\n");
+    printf("    [2] External (recommended)\n");
+    printf("    [3] Both\n");
+    int mode = read_choice(1, 3, 2);
+    step_log("menu: mode chosen");
+    if (mode == 2) c.mode = ICKY_SDK_EXTERNAL;
+    else if (mode == 3) c.mode = static_cast<icky_sdk_mode>(3);
+    else c.mode = ICKY_SDK_INTERNAL;
 
-    // We encode "both" by returning a special path in run — menu returns mode
-    // and interactive runner checks for both. Use mode INTERNAL and store flag in out_dir? 
-    // Cleaner: use engine field... We'll use out_dir sentinel or second function.
-    // Actually store both as mode with high bit — keep simple: return mode, 
-    // interactive handles 3 via local.
-
-    int mode_choice = read_choice(1, 3, 1);
-    // Stash both-request in out_dir as marker checked by caller
-    if (mode_choice == 2)
-        c.mode = ICKY_SDK_EXTERNAL;
-    else if (mode_choice == 3) {
-        c.mode = static_cast<icky_sdk_mode>(3); // both
-    } else
-        c.mode = ICKY_SDK_INTERNAL;
-
+    step_log("menu: resolving out dir");
     c.out_dir = default_output_dir();
-    std::printf("\n  Output directory:\n    %s\n", c.out_dir.c_str());
-    std::printf("  Website dump will also be written as:\n");
-    std::printf("    icky.dump.json  (upload this on the Icky Dumps site)\n");
-    std::printf("  Press Enter to start dump...\n");
+    printf("\n  Out: %s\n", c.out_dir.c_str());
+    printf("  Enter to dump...\n");
     {
-        std::string dummy;
-        std::getline(std::cin, dummy);
+        char dummy[8]{};
+        DWORD n = 0;
+        HANDLE hin = GetStdHandle(STD_INPUT_HANDLE);
+        if (hin && hin != INVALID_HANDLE_VALUE)
+            ReadConsoleA(hin, dummy, sizeof(dummy) - 1, &n, nullptr);
     }
+    step_log("menu: leave -> dump");
     return c;
 }
 

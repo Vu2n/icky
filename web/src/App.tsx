@@ -7,13 +7,12 @@ import { DumpDetail } from './pages/DumpDetail'
 import { Upload } from './pages/Upload'
 import { Docs } from './pages/Docs'
 
-function parseHash(): { page: string; slug?: string; local?: boolean } {
+function parseHash(): { page: string; slug?: string } {
   const raw = window.location.hash.replace(/^#\/?/, '') || ''
-  const [path, qs] = raw.split('?')
+  const [path] = raw.split('?')
   const parts = path.split('/').filter(Boolean)
-  const params = new URLSearchParams(qs || '')
   if (parts[0] === 'dump' && parts[1]) {
-    return { page: 'dump', slug: parts[1], local: params.get('src') === 'local' }
+    return { page: 'dump', slug: parts[1] }
   }
   if (parts[0] === 'dumps') return { page: 'dumps' }
   if (parts[0] === 'upload') return { page: 'upload' }
@@ -38,9 +37,7 @@ export default function App() {
         {route.page === 'dumps' && <Dumps />}
         {route.page === 'upload' && <Upload />}
         {route.page === 'docs' && <Docs />}
-        {route.page === 'dump' && route.slug && (
-          <DumpDetail slug={route.slug} localOnly={route.local} />
-        )}
+        {route.page === 'dump' && route.slug && <DumpDetail slug={route.slug} />}
       </main>
       <Footer />
     </div>

@@ -1,5 +1,7 @@
 #include "sdk_writer.h"
 #include "dump_format.h"
+#include "engines/il2cpp/deobf.h"
+#include "engines/il2cpp/decrypt_recover.h"
 #include "core/fsutil.h"
 #include "core/logger.h"
 
@@ -150,10 +152,18 @@ void write_type(std::ostringstream& os, const SdkType& t, icky_sdk_mode mode) {
             os << "    char pad_" << pad++ << "[0x" << std::hex << (f.offset - cursor) << std::dec << "];\n";
         }
         std::string ty = map_cpp_type(f.type_name);
+        if (f.is_encrypted)
+            ty = "void*"; // encrypted wrapper / handle holder
         os << "    " << ty << " " << sanitize_ident(f.name);
         if (f.array_dim > 1) os << "[" << f.array_dim << "]";
         os << "; // 0x" << std::hex << f.offset << std::dec;
         if (!f.type_name.empty()) os << " " << f.type_name;
+        if (f.is_encrypted)
+            os << " [ENCRYPTED]";
+        if (f.decrypt.valid && f.decrypt.decrypt_rva)
+            os << " decrypt_rva=0x" << std::hex << f.decrypt.decrypt_rva << std::dec;
+        if (!f.decrypt.algo_summary.empty())
+            os << " " << f.decrypt.algo_summary;
         os << "\n";
         int32_t span = (f.size > 0 ? f.size : 8);
         if (f.array_dim > 1) span *= f.array_dim;
@@ -334,6 +344,46 @@ int write_tree(const SdkModel& model, icky_sdk_mode mode, const std::string& roo
         const auto root_dump = join_path(root, "icky.dump.json");
         write_icky_dump_json(model, mode, root_dump);
 
+        // Deobf artifacts (hash → name map + semantic offsets for Rust)
+        if (model.engine == ICKY_ENGINE_IL2CPP &&
+            model.metadata.count("deobf_done")) {
+            il2cpp::DeobfStats st{};
+            if (model.metadata.count("deobf_renamed_fields"))
+                st.renamed_fields = static_cast<size_t>(std::stoull(model.metadata.at("deobf_renamed_fields")));
+            if (model.metadata.count("deobf_renamed_methods"))
+                st.renamed_methods = static_cast<size_t>(std::stoull(model.metadata.at("deobf_renamed_methods")));
+            if (model.metadata.count("deobf_semantic"))
+                st.semantic_hits = static_cast<size_t>(std::stoull(model.metadata.at("deobf_semantic")));
+            if (model.metadata.count("deobf_string_xref"))
+                st.string_xref_hits = static_cast<size_t>(std::stoull(model.metadata.at("deobf_string_xref")));
+
+            const auto map_path = join_path(eng_dir, "name_map.json");
+            if (il2cpp::write_name_map(model, map_path, st))
+                ++files;
+            const auto sem_path = join_path(eng_dir, "RustOffsets.hpp");
+            if (il2cpp::write_semantic_offsets(model, sem_path))
+                ++files;
+        }
+
+        // Encrypted field decrypt helpers (always try if any field has decrypt info)
+        {
+            bool any_dec = false;
+            for (const auto& t : model.types) {
+                for (const auto& f : t.fields) {
+                    if (f.decrypt.valid && f.decrypt.decrypt_rva) {
+                        any_dec = true;
+                        break;
+                    }
+                }
+                if (any_dec) break;
+            }
+            if (any_dec) {
+                const auto dec_path = join_path(eng_dir, "Decrypt.hpp");
+                if (il2cpp::write_decrypt_header(model, dec_path))
+                    ++files;
+            }
+        }
+
         std::ostringstream os;
         os << "{\n"
            << "  \"tool\": \"Icky\",\n"
@@ -349,8 +399,24 @@ int write_tree(const SdkModel& model, icky_sdk_mode mode, const std::string& roo
            << "  \"module\": \"" << model.primary_module.name << "\",\n"
            << "  \"types\": " << model.types.size() << ",\n"
            << "  \"globals\": " << model.globals.size() << ",\n"
-           << "  \"dump_file\": \"icky.dump.json\"\n"
-           << "}\n";
+           << "  \"dump_file\": \"icky.dump.json\"";
+        if (model.metadata.count("deobf_done")) {
+            os << ",\n  \"deobf\": true";
+            if (model.metadata.count("deobf_semantic"))
+                os << ",\n  \"deobf_semantic\": " << model.metadata.at("deobf_semantic");
+            if (model.metadata.count("deobf_string_xref"))
+                os << ",\n  \"deobf_string_xref\": " << model.metadata.at("deobf_string_xref");
+        }
+        if (model.metadata.count("decrypt_fields")) {
+            os << ",\n  \"decrypt_fields\": " << model.metadata.at("decrypt_fields");
+            if (model.metadata.count("decrypt_algos"))
+                os << ",\n  \"decrypt_algos\": " << model.metadata.at("decrypt_algos");
+            if (model.metadata.count("decrypt_rejected"))
+                os << ",\n  \"decrypt_rejected\": " << model.metadata.at("decrypt_rejected");
+            if (model.metadata.count("decrypt_wrapper_only"))
+                os << ",\n  \"decrypt_wrapper_only\": " << model.metadata.at("decrypt_wrapper_only");
+        }
+        os << "\n}\n";
         if (write_text_file(join_path(eng_dir, "summary.json"), os.str()))
             ++files;
     }

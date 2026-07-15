@@ -9,28 +9,54 @@
 
 namespace icky {
 
+// Safe for injectors: reject guard / noaccess and never cross regions blindly.
 inline bool is_readable(const void* p, size_t size) {
     if (!p || !size) return false;
-    MEMORY_BASIC_INFORMATION mbi{};
-    if (!VirtualQuery(p, &mbi, sizeof(mbi))) return false;
-    if (mbi.State != MEM_COMMIT) return false;
-    const DWORD prot = mbi.Protect & 0xFF;
-    if (prot == PAGE_NOACCESS || prot == PAGE_EXECUTE) return false;
-    const auto start = reinterpret_cast<const uint8_t*>(p);
-    const auto end = start + size;
-    const auto reg_end = reinterpret_cast<const uint8_t*>(mbi.BaseAddress) + mbi.RegionSize;
-    return end <= reg_end;
+    auto cur = reinterpret_cast<const uint8_t*>(p);
+    const auto end = cur + size;
+    while (cur < end) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (!VirtualQuery(cur, &mbi, sizeof(mbi)))
+            return false;
+        if (mbi.State != MEM_COMMIT)
+            return false;
+        // PAGE_GUARD faults on first touch — common crash source when scanning modules
+        if (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS))
+            return false;
+        const DWORD prot = mbi.Protect & 0xFF;
+        const bool ok =
+            prot == PAGE_READONLY || prot == PAGE_READWRITE || prot == PAGE_WRITECOPY ||
+            prot == PAGE_EXECUTE_READ || prot == PAGE_EXECUTE_READWRITE ||
+            prot == PAGE_EXECUTE_WRITECOPY;
+        if (!ok)
+            return false;
+        const auto reg_end =
+            reinterpret_cast<const uint8_t*>(mbi.BaseAddress) + mbi.RegionSize;
+        if (reg_end <= cur)
+            return false;
+        cur = reg_end < end ? reg_end : end;
+    }
+    return true;
 }
 
-// In-process (injected) memory view
+// SEH-guarded copy — last line of defense under EAC/obfuscated modules
+inline bool safe_copy(const void* src, void* dst, size_t size) {
+    if (!src || !dst || !size) return false;
+    __try {
+        std::memcpy(dst, src, size);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 class Mem {
 public:
     static bool read(uint64_t addr, void* buf, size_t size) {
         if (!addr || !buf || !size) return false;
         const void* p = reinterpret_cast<const void*>(static_cast<uintptr_t>(addr));
         if (!is_readable(p, size)) return false;
-        std::memcpy(buf, p, size);
-        return true;
+        return safe_copy(p, buf, size);
     }
 
     template <typename T>

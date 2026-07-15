@@ -27,7 +27,7 @@ icky_engine detect_best_engine(DetectResult* info) {
     DetectResult best_det{};
 
     for (auto& e : engine_registry()) {
-        auto d = e->detect();
+        DetectResult d = e->detect(); // module-list only; keep free of game calls
         ILOG_I("Detect %-10s  matched=%d  conf=%.2f  %s",
                e->name(), d.matched ? 1 : 0, d.confidence, d.detail.c_str());
         if (d.matched && d.confidence > best) {

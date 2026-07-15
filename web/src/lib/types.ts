@@ -28,6 +28,18 @@ export interface IckyDump {
     functions: number
     globals: number
     packages?: number
+    /** IL2CPP / Rust encrypted wrapper fields */
+    encrypted_fields?: number
+    encrypted_with_decrypt?: number
+    encrypted_with_algo?: number
+  }
+  /** Present when dump recovered field decrypts (Rust / Facepunch) */
+  encryption?: {
+    scheme?: string
+    note?: string
+    fields_total?: number
+    fields_with_decrypt?: number
+    fields_with_algo?: number
   }
   layout?: Record<string, string | number>
   globals: DumpGlobal[]
@@ -43,11 +55,26 @@ export interface DumpGlobal {
   comment?: string
 }
 
+export interface DumpFieldDecrypt {
+  getter_rva?: string
+  decrypt_rva?: string
+  typeinfo_rva?: string
+  algo?: string
+  inner_type?: string
+  xor?: string[]
+  add?: string[]
+  rol?: number[]
+}
+
 export interface DumpField {
   name: string
   offset: number
   size: number
   type: string
+  static?: boolean
+  encrypted?: boolean
+  decrypt?: DumpFieldDecrypt
+  comment?: string
 }
 
 export interface DumpMethod {
@@ -55,6 +82,10 @@ export interface DumpMethod {
   rva: string
   address?: string
   flags?: number
+  return_type?: string
+  static?: boolean
+  comment?: string
+  params?: { name: string; type: string }[]
 }
 
 export interface DumpEnumMember {
@@ -89,6 +120,8 @@ export interface CatalogEntry {
     classes?: number
     globals: number
     packages?: number
+    encrypted_fields?: number
+    encrypted_with_decrypt?: number
   }
   path: string
   featured?: boolean

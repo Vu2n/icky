@@ -20,6 +20,21 @@ enum class TypeKind {
     Namespace
 };
 
+// Recovered decrypt stub for Facepunch-style encrypted object fields.
+struct FieldDecrypt {
+    bool     valid = false;
+    uint64_t getter_rva = 0;
+    uint64_t decrypt_rva = 0;
+    uint64_t typeinfo_rva = 0; // static TypeInfo* / key passed as 2nd arg
+    // Algorithm on the uint64 handle (2x u32 words), applied before GC resolve:
+    // order of operations recovered from decrypt stub (may be incomplete).
+    std::vector<uint32_t> xor_imms;
+    std::vector<uint32_t> add_imms;
+    std::vector<int>      rol_amounts; // positive = ROL
+    std::string           algo_summary;  // human-readable
+    std::string           inner_type;    // e.g. PlayerEyes if type was Enc<PlayerEyes>
+};
+
 struct SdkField {
     std::string name;
     std::string type_name;
@@ -28,8 +43,10 @@ struct SdkField {
     int32_t     array_dim  = 1;
     bool        is_static  = false;
     bool        is_pointer = false;
+    bool        is_encrypted = false; // encrypted wrapper / needs decrypt
     uint64_t    flags      = 0;
     std::string comment;
+    FieldDecrypt decrypt;
 };
 
 struct SdkMethodParam {

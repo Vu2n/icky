@@ -1,17 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Search, HardDrive } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Search } from 'lucide-react'
 import type { CatalogEntry } from '../lib/types'
-import {
-  catalogFromDump,
-  engineColor,
-  fetchCatalog,
-  formatDate,
-  loadLocalDumps,
-} from '../lib/dump'
+import { engineColor, fetchCatalog, formatDate } from '../lib/dump'
 
 export function Dumps() {
   const [official, setOfficial] = useState<CatalogEntry[]>([])
-  const [local, setLocal] = useState<CatalogEntry[]>([])
   const [q, setQ] = useState('')
   const [engine, setEngine] = useState('all')
   const [err, setErr] = useState<string | null>(null)
@@ -29,23 +22,12 @@ export function Dumps() {
         if (!cancelled) setLoading(false)
       }
     })()
-    setLocal(loadLocalDumps().map((d) => catalogFromDump(d, `local:${d.game.slug}`)))
     return () => {
       cancelled = true
     }
   }, [])
 
-  const all = useMemo(() => {
-    // One card per slug — official wins over local
-    const map = new Map<string, CatalogEntry & { source: 'official' | 'local' }>()
-    for (const d of official) map.set(d.slug, { ...d, source: 'official' })
-    for (const d of local) {
-      if (!map.has(d.slug)) map.set(d.slug, { ...d, source: 'local' })
-    }
-    return [...map.values()]
-  }, [official, local])
-
-  const filtered = all.filter((d) => {
+  const filtered = official.filter((d) => {
     if (engine !== 'all' && d.engine !== engine) return false
     if (!q.trim()) return true
     const s = q.toLowerCase()
@@ -53,7 +35,8 @@ export function Dumps() {
       d.game.toLowerCase().includes(s) ||
       d.executable.toLowerCase().includes(s) ||
       d.slug.includes(s) ||
-      d.engine.includes(s)
+      d.engine.includes(s) ||
+      (d.tags || []).some((t) => t.includes(s))
     )
   })
 
@@ -102,49 +85,59 @@ export function Dumps() {
       )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {filtered.map((d) => (
-          <a
-            key={`${d.source}-${d.slug}`}
-            href={`#/dump/${d.slug}${d.source === 'local' ? '?src=local' : ''}`}
-            className="card-surface group block p-5 transition-all hover:-translate-y-0.5 hover:border-accent/25"
-          >
-            <div className="mb-3 flex items-start justify-between gap-2">
-              <h2 className="font-display text-lg font-semibold group-hover:text-accent-hi">
-                {d.game}
-              </h2>
-            </div>
-            <p className="truncate font-mono text-xs text-dim">{d.executable}</p>
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <span
-                className={`rounded-md border px-2 py-0.5 text-[11px] font-medium ${engineColor(d.engine)}`}
-              >
-                {d.engine_label || d.engine}
-              </span>
-              <span className="rounded-md border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[11px] text-muted">
-                {d.mode}
-              </span>
-              {d.source === 'local' && (
-                <span className="inline-flex items-center gap-1 rounded-md border border-white/10 px-2 py-0.5 text-[11px] text-dim">
-                  <HardDrive size={10} /> local
+        {filtered.map((d) => {
+          const enc =
+            (d.stats.encrypted_with_decrypt ?? 0) > 0 ||
+            (d.stats.encrypted_fields ?? 0) > 0 ||
+            (d.tags || []).includes('encrypted') ||
+            (d.tags || []).includes('decrypt')
+          return (
+            <a
+              key={d.slug}
+              href={`#/dump/${d.slug}`}
+              className="card-surface group block p-5 transition-all hover:-translate-y-0.5 hover:border-accent/25"
+            >
+              <div className="mb-3 flex items-start justify-between gap-2">
+                <h2 className="font-display text-lg font-semibold group-hover:text-accent-hi">
+                  {d.game}
+                </h2>
+              </div>
+              <p className="truncate font-mono text-xs text-dim">{d.executable}</p>
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <span
+                  className={`rounded-md border px-2 py-0.5 text-[11px] font-medium ${engineColor(d.engine)}`}
+                >
+                  {d.engine_label || d.engine}
                 </span>
-              )}
-            </div>
-            <dl className="mt-4 grid grid-cols-3 gap-2 border-t border-white/[0.05] pt-4 text-center">
-              <div>
-                <dt className="text-[10px] uppercase text-dim">Types</dt>
-                <dd className="font-display text-sm font-semibold">{d.stats.types}</dd>
+                <span className="rounded-md border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[11px] text-muted">
+                  {d.mode}
+                </span>
+                {enc && (
+                  <span className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-200">
+                    encrypted
+                    {(d.stats.encrypted_with_decrypt ?? 0) > 0
+                      ? ` · ${d.stats.encrypted_with_decrypt} decrypts`
+                      : ''}
+                  </span>
+                )}
               </div>
-              <div>
-                <dt className="text-[10px] uppercase text-dim">Globals</dt>
-                <dd className="font-display text-sm font-semibold">{d.stats.globals}</dd>
-              </div>
-              <div>
-                <dt className="text-[10px] uppercase text-dim">Updated</dt>
-                <dd className="truncate text-[11px] text-muted">{formatDate(d.generated_at)}</dd>
-              </div>
-            </dl>
-          </a>
-        ))}
+              <dl className="mt-4 grid grid-cols-3 gap-2 border-t border-white/[0.05] pt-4 text-center">
+                <div>
+                  <dt className="text-[10px] uppercase text-dim">Types</dt>
+                  <dd className="font-display text-sm font-semibold">{d.stats.types}</dd>
+                </div>
+                <div>
+                  <dt className="text-[10px] uppercase text-dim">Globals</dt>
+                  <dd className="font-display text-sm font-semibold">{d.stats.globals}</dd>
+                </div>
+                <div>
+                  <dt className="text-[10px] uppercase text-dim">Updated</dt>
+                  <dd className="truncate text-[11px] text-muted">{formatDate(d.generated_at)}</dd>
+                </div>
+              </dl>
+            </a>
+          )
+        })}
       </div>
 
       {!loading && filtered.length === 0 && (

@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - "web/**"
+      - "web/public/dumps/**"
       - ".github/workflows/deploy-dumps.yml"
   workflow_dispatch:
 

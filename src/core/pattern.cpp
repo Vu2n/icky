@@ -38,23 +38,30 @@ std::optional<Pattern> Pattern::parse(const std::string& ida) {
 uint64_t scan(uint64_t base, size_t size, const Pattern& pat) {
     if (!base || !size || pat.bytes.empty() || pat.bytes.size() > size) return 0;
     const auto* data = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(base));
-    if (!is_readable(data, size > 0x1000 ? 0x1000 : size)) {
-        // region may span pages; still attempt carefully in page-sized steps
-    }
     const size_t n = pat.bytes.size();
-    for (size_t i = 0; i + n <= size; ++i) {
-        if ((i & 0xFFF) == 0 && !is_readable(data + i, n)) {
-            i += 0xFFF;
+    // Page-wise: skip non-readable / PAGE_GUARD regions (prevents inject AV)
+    for (size_t i = 0; i + n <= size;) {
+        if (!is_readable(data + i, n)) {
+            // jump to next page
+            i = (i + 0x1000) & ~size_t(0xFFF);
             continue;
         }
-        bool ok = true;
-        for (size_t j = 0; j < n; ++j) {
-            if (pat.mask[j] && data[i + j] != pat.bytes[j]) {
-                ok = false;
-                break;
+        // scan within this page as far as readable
+        size_t page_end = (i + 0x1000) & ~size_t(0xFFF);
+        if (page_end <= i) page_end = i + 0x1000;
+        if (page_end > size) page_end = size;
+        const size_t last = page_end >= n ? page_end - n : 0;
+        for (; i <= last; ++i) {
+            bool ok = true;
+            for (size_t j = 0; j < n; ++j) {
+                if (pat.mask[j] && data[i + j] != pat.bytes[j]) {
+                    ok = false;
+                    break;
+                }
             }
+            if (ok) return base + i;
         }
-        if (ok) return base + i;
+        i = page_end;
     }
     return 0;
 }

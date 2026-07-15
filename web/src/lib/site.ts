@@ -20,13 +20,17 @@ export function buildDumpIssueUrl(opts: {
   types: number
   globals: number
   mode: string
+  encrypted?: boolean
 }): string {
-  const title = `Dump: ${opts.game}`
+  const title = opts.encrypted
+    ? `Dump: ${opts.game} [encrypted]`
+    : `Dump: ${opts.game}`
   // template + labels — user still needs to attach the file
+  const labels = opts.encrypted ? 'dump-submission,encrypted' : 'dump-submission'
   const params = new URLSearchParams({
     template: 'dump_submission.yml',
     title,
-    labels: 'dump-submission',
+    labels,
   })
   return `${SITE.repoUrl}/issues/new?${params.toString()}`
 }

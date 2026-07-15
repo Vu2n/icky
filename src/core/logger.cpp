@@ -1,12 +1,15 @@
 #include "logger.h"
+#include "modules.h"
+
 #include <cstdio>
 #include <cstdarg>
-#include <mutex>
+#include <Windows.h>
 
 namespace icky {
 namespace {
-std::mutex g_mu;
-icky_log_level g_level = ICKY_LOG_INFO;
+
+// No std::mutex — static mutex init / lock has crashed under inject hosts
+volatile long g_level = ICKY_LOG_INFO;
 icky_log_fn g_fn = nullptr;
 void* g_user = nullptr;
 
@@ -20,40 +23,52 @@ const char* lvl(icky_log_level l) {
     default: return "OFF";
     }
 }
+
+void write_line(const char* line) {
+    OutputDebugStringA(line);
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (h && h != INVALID_HANDLE_VALUE) {
+        DWORD mode = 0, w = 0;
+        if (GetConsoleMode(h, &mode)) {
+            WriteConsoleA(h, line, (DWORD)lstrlenA(line), &w, nullptr);
+            return;
+        }
+    }
+    fputs(line, stdout);
+    fflush(stdout);
+}
+
 } // namespace
 
 void set_log_level(icky_log_level level) {
-    std::lock_guard lock(g_mu);
-    g_level = level;
+    InterlockedExchange(&g_level, (long)level);
 }
 
 void set_log_callback(icky_log_fn fn, void* user) {
-    std::lock_guard lock(g_mu);
+    // Intentionally no lock; callback rarely changed
     g_fn = fn;
     g_user = user;
 }
 
 void log(icky_log_level level, const char* fmt, ...) {
-    icky_log_fn fn;
-    void* user;
-    {
-        std::lock_guard lock(g_mu);
-        if (level < g_level || g_level == ICKY_LOG_OFF) return;
-        fn = g_fn;
-        user = g_user;
-    }
-    char buf[4096];
+    if ((long)level < g_level || g_level == ICKY_LOG_OFF)
+        return;
+
+    char body[4000];
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+    vsnprintf(body, sizeof(body), fmt, ap);
     va_end(ap);
-    buf[sizeof(buf) - 1] = 0;
-    if (fn) {
-        fn(level, buf, user);
+    body[sizeof(body) - 1] = 0;
+
+    if (g_fn) {
+        g_fn(level, body, g_user);
         return;
     }
-    std::fprintf(stdout, "[icky][%s] %s\n", lvl(level), buf);
-    std::fflush(stdout);
+
+    char line[4200];
+    _snprintf_s(line, sizeof(line), _TRUNCATE, "[icky][%s] %s\r\n", lvl(level), body);
+    write_line(line);
 }
 
 } // namespace icky

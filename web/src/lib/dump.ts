@@ -1,7 +1,5 @@
-import type { Catalog, CatalogEntry, IckyDump } from './types'
+import type { Catalog, CatalogEntry, DumpField, IckyDump } from './types'
 import { buildDumpIssueUrl } from './site'
-
-const LOCAL_KEY = 'icky.community_dumps.v1'
 
 export function validateDump(data: unknown): { ok: true; dump: IckyDump } | { ok: false; error: string } {
   if (!data || typeof data !== 'object') return { ok: false, error: 'Not a JSON object' }
@@ -18,7 +16,38 @@ export function validateDump(data: unknown): { ok: true; dump: IckyDump } | { ok
   return { ok: true, dump: data as IckyDump }
 }
 
+export function countEncryption(dump: IckyDump): {
+  encrypted: number
+  withDecrypt: number
+  withAlgo: number
+} {
+  let encrypted = dump.stats?.encrypted_fields ?? 0
+  let withDecrypt = dump.stats?.encrypted_with_decrypt ?? 0
+  let withAlgo = dump.stats?.encrypted_with_algo ?? 0
+  if (encrypted || withDecrypt) {
+    return { encrypted, withDecrypt, withAlgo }
+  }
+  // Fallback scan for older dumps without stats
+  for (const t of dump.types || []) {
+    for (const f of t.fields || []) {
+      if (f.encrypted || f.decrypt?.decrypt_rva) encrypted++
+      if (f.decrypt?.decrypt_rva) withDecrypt++
+      if (f.decrypt?.xor?.length || f.decrypt?.rol?.length || f.decrypt?.add?.length) withAlgo++
+    }
+  }
+  return { encrypted, withDecrypt, withAlgo }
+}
+
+export function hasEncryption(dump: IckyDump): boolean {
+  const c = countEncryption(dump)
+  return c.encrypted > 0 || c.withDecrypt > 0 || !!dump.encryption
+}
+
 export function catalogFromDump(dump: IckyDump, path?: string): CatalogEntry {
+  const enc = countEncryption(dump)
+  const tags = [dump.engine.id, dump.mode]
+  if (enc.withDecrypt > 0 || enc.encrypted > 0) tags.push('encrypted')
+  if (enc.withDecrypt > 0) tags.push('decrypt')
   return {
     slug: dump.game.slug,
     game: dump.game.name,
@@ -32,47 +61,29 @@ export function catalogFromDump(dump: IckyDump, path?: string): CatalogEntry {
       classes: dump.stats?.classes,
       globals: dump.stats?.globals ?? dump.globals.length,
       packages: dump.stats?.packages,
+      encrypted_fields: enc.encrypted || undefined,
+      encrypted_with_decrypt: enc.withDecrypt || undefined,
     },
     path: path ?? `dumps/${dump.game.slug}/dump.json`,
-    tags: [dump.engine.id, dump.mode],
+    tags,
   }
-}
-
-export function loadLocalDumps(): IckyDump[] {
-  try {
-    const raw = localStorage.getItem(LOCAL_KEY)
-    if (!raw) return []
-    const arr = JSON.parse(raw) as IckyDump[]
-    return Array.isArray(arr) ? arr : []
-  } catch {
-    return []
-  }
-}
-
-export function saveLocalDump(dump: IckyDump): void {
-  // Upsert by game slug — re-saving the same game replaces the local copy
-  const list = loadLocalDumps().filter((d) => d.game.slug !== dump.game.slug)
-  list.unshift(dump)
-  localStorage.setItem(LOCAL_KEY, JSON.stringify(list.slice(0, 40)))
-}
-
-export function removeLocalDump(slug: string): void {
-  const list = loadLocalDumps().filter((d) => d.game.slug !== slug)
-  localStorage.setItem(LOCAL_KEY, JSON.stringify(list))
 }
 
 export async function fetchCatalog(): Promise<Catalog> {
-  const url = `${import.meta.env.BASE_URL}dumps/catalog.json`
-  const res = await fetch(url)
+  // Cache-bust so re-published dumps show up after deploy (GH Pages is aggressive)
+  const url = `${import.meta.env.BASE_URL}dumps/catalog.json?t=${Date.now()}`
+  const res = await fetch(url, { cache: 'no-store' })
   if (!res.ok) throw new Error(`catalog ${res.status}`)
   return res.json() as Promise<Catalog>
 }
 
 export async function fetchDump(path: string): Promise<IckyDump> {
+  const bare = path.replace(/^\//, '')
+  const sep = bare.includes('?') ? '&' : '?'
   const url = path.startsWith('http')
     ? path
-    : `${import.meta.env.BASE_URL}${path.replace(/^\//, '')}`
-  const res = await fetch(url)
+    : `${import.meta.env.BASE_URL}${bare}${sep}t=${Date.now()}`
+  const res = await fetch(url, { cache: 'no-store' })
   if (!res.ok) throw new Error(`dump ${res.status}`)
   const json = await res.json()
   const v = validateDump(json)
@@ -179,6 +190,7 @@ export async function pickDumpFromFiles(files: FileList | File[]): Promise<
 }
 
 export function openSubmitIssue(dump: IckyDump) {
+  const enc = countEncryption(dump)
   const url = buildDumpIssueUrl({
     game: dump.game.name,
     engine: dump.engine.id,
@@ -186,6 +198,7 @@ export function openSubmitIssue(dump: IckyDump) {
     types: dump.stats?.types ?? dump.types.length,
     globals: dump.stats?.globals ?? dump.globals.length,
     mode: dump.mode,
+    encrypted: enc.withDecrypt > 0 || enc.encrypted > 0,
   })
   window.open(url, '_blank', 'noopener,noreferrer')
 }
@@ -197,4 +210,8 @@ export function estimateDumpSize(dump: IckyDump): number {
   } catch {
     return 0
   }
+}
+
+export function fieldIsEncrypted(f: DumpField): boolean {
+  return !!(f.encrypted || f.decrypt?.decrypt_rva || (f.type && f.type.startsWith('Encrypted<')))
 }

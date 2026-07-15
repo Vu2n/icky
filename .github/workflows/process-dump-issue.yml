@@ -80,6 +80,21 @@ jobs:
           with open("/tmp/icky-dump/dump.json","w",encoding="utf-8") as f:
               json.dump(dump,f,indent=2)
               f.write("\n")
+          # Count encryption if stats missing (older dumps)
+          stats = dump.get("stats") or {}
+          enc_fields = stats.get("encrypted_fields")
+          enc_dec = stats.get("encrypted_with_decrypt")
+          if enc_fields is None or enc_dec is None:
+              enc_fields = enc_dec = 0
+              for t in dump.get("types") or []:
+                  for f in t.get("fields") or []:
+                      if f.get("encrypted") or (f.get("decrypt") or {}).get("decrypt_rva"):
+                          enc_fields += 1
+                      if (f.get("decrypt") or {}).get("decrypt_rva"):
+                          enc_dec += 1
+              stats = dict(stats)
+              stats["encrypted_fields"] = enc_fields
+              stats["encrypted_with_decrypt"] = enc_dec
           with open("/tmp/icky-dump/meta.json","w",encoding="utf-8") as f:
               json.dump({
                 "slug": slug,
@@ -89,9 +104,10 @@ jobs:
                 "engine_label": (dump.get("engine") or {}).get("label","Unknown"),
                 "mode": dump.get("mode","internal"),
                 "generated_at": dump.get("generated_at",""),
-                "stats": dump.get("stats") or {},
+                "stats": stats,
+                "encrypted": bool(enc_dec or enc_fields or dump.get("encryption")),
               }, f)
-          print("OK slug=", slug, "types=", (dump.get("stats") or {}).get("types"))
+          print("OK slug=", slug, "types=", stats.get("types"), "enc_decrypt=", enc_dec)
           PY
 
       - name: Upsert dump in catalog
@@ -119,6 +135,13 @@ jobs:
           else:
               cat = {"schema": "icky.catalog/v1", "dumps": []}
 
+          tags = [meta["engine"], meta["mode"], "community"]
+          st = meta.get("stats") or {}
+          if meta.get("encrypted") or st.get("encrypted_with_decrypt") or st.get("encrypted_fields"):
+              tags.append("encrypted")
+          if st.get("encrypted_with_decrypt"):
+              tags.append("decrypt")
+
           entry = {
             "slug": meta["slug"],
             "game": meta["game"],
@@ -128,14 +151,16 @@ jobs:
             "mode": meta["mode"],
             "generated_at": meta["generated_at"],
             "stats": {
-              "types": meta.get("stats", {}).get("types", 0),
-              "classes": meta.get("stats", {}).get("classes"),
-              "globals": meta.get("stats", {}).get("globals", 0),
-              "packages": meta.get("stats", {}).get("packages"),
+              "types": st.get("types", 0),
+              "classes": st.get("classes"),
+              "globals": st.get("globals", 0),
+              "packages": st.get("packages"),
+              "encrypted_fields": st.get("encrypted_fields"),
+              "encrypted_with_decrypt": st.get("encrypted_with_decrypt"),
             },
             "path": f"dumps/{meta['slug']}/dump.json",
             "featured": False,
-            "tags": [meta["engine"], meta["mode"], "community"],
+            "tags": tags,
           }
 
           dumps = cat.get("dumps") or []

@@ -10,7 +10,6 @@
 #include <Windows.h>
 #include <atomic>
 #include <string>
-#include <iostream>
 #include <cstdio>
 
 namespace {
@@ -19,56 +18,73 @@ std::atomic<bool> g_running{false};
 HMODULE g_module = nullptr;
 
 void log_to_console(icky_log_level level, const char* msg, void*) {
-    const char* tag = "INFO";
-    switch (level) {
-    case ICKY_LOG_TRACE: tag = "TRACE"; break;
-    case ICKY_LOG_DEBUG: tag = "DEBUG"; break;
-    case ICKY_LOG_INFO:  tag = "INFO";  break;
-    case ICKY_LOG_WARN:  tag = "WARN";  break;
-    case ICKY_LOG_ERROR: tag = "ERROR"; break;
-    default: break;
+    (void)level;
+    // Single path only — do not call step_log (avoids double print / re-entry)
+    char line[4200];
+    _snprintf_s(line, sizeof(line), _TRUNCATE, "[icky] %s\r\n", msg ? msg : "");
+    OutputDebugStringA(line);
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (h && h != INVALID_HANDLE_VALUE) {
+        DWORD mode = 0, w = 0;
+        if (GetConsoleMode(h, &mode))
+            WriteConsoleA(h, line, (DWORD)lstrlenA(line), &w, nullptr);
+        else {
+            fputs(line, stdout);
+            fflush(stdout);
+        }
     }
-    std::printf("[%s] %s\n", tag, msg);
-    std::fflush(stdout);
 }
 
 DWORD WINAPI icky_thread(LPVOID) {
+    Sleep(3000);
     g_running = true;
-    icky::alloc_console();
-    icky_set_log_callback(log_to_console, nullptr);
-    icky_set_log_level(ICKY_LOG_INFO);
 
-    ILOG_I("Icky %s loaded into %s", icky_version(), icky::process_name().c_str());
+    icky::step_log("1 worker alive");
 
-    icky_status st = icky_run_interactive();
+    bool con = icky::alloc_console();
+    icky::step_log(con ? "2 console ok" : "2 console fail");
 
-    if (st == ICKY_OK)
-        ILOG_I("Done. You can unload the DLL or close this console.");
-    else if (st == ICKY_ERR_CANCELLED)
-        ILOG_W("Cancelled by user.");
-    else
-        ILOG_E("Finished with error: %s", icky_status_string(st));
+    // Skip icky_set_log_callback / mutex logger — that path crashes under some injectors
+    // (static std::mutex + freopen CRT). All UI uses step_log / WriteConsole only.
+    Sleep(100);
+    icky::step_log("3 skip callback (safe)");
+    icky::step_log("4 before menu");
 
-    std::printf("\n  Press Enter to close console...\n");
-    std::string line;
-    std::getline(std::cin, line);
+    icky_status st = ICKY_ERR_INTERNAL;
+    try {
+        st = icky_run_interactive();
+    } catch (...) {
+        icky::step_log("exception in menu/dump");
+        st = ICKY_ERR_DUMP;
+    }
+
+    icky::step_log(st == ICKY_OK ? "5 done ok" : "5 done with error");
+
+    // Use Win32 only for wait — CRT stdin can be dead
+    icky::step_log("press ENTER in console or wait 30s...");
+    HANDLE hin = GetStdHandle(STD_INPUT_HANDLE);
+    if (hin && hin != INVALID_HANDLE_VALUE) {
+        // Wait for any key or 30s
+        WaitForSingleObject(hin, 30000);
+        // Drain
+        INPUT_RECORD rec{};
+        DWORD n = 0;
+        while (PeekConsoleInputA(hin, &rec, 1, &n) && n)
+            ReadConsoleInputA(hin, &rec, 1, &n);
+    } else {
+        Sleep(10000);
+    }
 
     icky::free_console();
     g_running = false;
-    // Optional: FreeLibraryAndExitThread for self-unload
-    // FreeLibraryAndExitThread(g_module, 0);
     return 0;
 }
 
 } // namespace
 
-// ── Public C API ────────────────────────────────────────────────────────────
-
 extern "C" {
 
-ICKY_API const char* ICKY_CALL icky_version(void) {
-    return "1.0.0";
-}
+ICKY_API const char* ICKY_CALL icky_version(void) { return "1.0.3"; }
 
 ICKY_API const char* ICKY_CALL icky_engine_name(icky_engine e) {
     switch (e) {
@@ -102,47 +118,51 @@ ICKY_API void ICKY_CALL icky_set_log_callback(icky_log_fn fn, void* user) {
 }
 
 ICKY_API icky_engine ICKY_CALL icky_detect_engine(void) {
-    return icky::detect_best_engine(nullptr);
+    // Soft only
+    if (GetModuleHandleA("GameAssembly.dll")) return ICKY_ENGINE_IL2CPP;
+    if (GetModuleHandleA("mono-2.0-bdwgc.dll") || GetModuleHandleA("mono.dll"))
+        return ICKY_ENGINE_MONO;
+    return ICKY_ENGINE_UNKNOWN;
 }
 
 ICKY_API icky_status ICKY_CALL icky_run(icky_engine engine, icky_sdk_mode mode, const char* out_dir) {
+    icky::step_log("icky_run");
     icky::SdkModel model;
     icky::DetectResult det{};
-    if (!icky::dump_engine(engine, model, &det))
+    if (!icky::dump_engine(engine, model, &det)) {
+        icky::step_log("dump_engine failed");
         return ICKY_ERR_DUMP;
-
-    if (engine == ICKY_ENGINE_UNKNOWN)
-        model.engine = det.matched ? icky::detect_best_engine(nullptr) : model.engine;
-
+    }
+    icky::step_log("writing files");
     std::string dir = out_dir ? out_dir : icky::default_output_dir();
-
-    // mode == 3 means both (internal console encoding)
     if (static_cast<int>(mode) == 3) {
         auto a = icky::write_sdk(model, ICKY_SDK_INTERNAL, dir);
         auto b = icky::write_sdk(model, ICKY_SDK_EXTERNAL, dir);
         if (!a.ok && !b.ok) return ICKY_ERR_IO;
-        ILOG_I("Internal files: %d  External files: %d  → %s", a.files, b.files, dir.c_str());
         return ICKY_OK;
     }
-
     auto wr = icky::write_sdk(model, mode, dir);
-    if (!wr.ok) return ICKY_ERR_IO;
-    ILOG_I("SDK written: %s (%d files)", wr.out_dir.c_str(), wr.files);
-    return ICKY_OK;
+    return wr.ok ? ICKY_OK : ICKY_ERR_IO;
 }
 
 ICKY_API icky_status ICKY_CALL icky_run_interactive(void) {
+    icky::step_log("4a run_console_menu enter");
     auto choices = icky::run_console_menu();
+    icky::step_log("4b menu returned");
     if (choices.cancelled)
         return ICKY_ERR_CANCELLED;
 
-    ILOG_I("Dumping… engine=%s mode=%d",
-           icky_engine_name(choices.engine == ICKY_ENGINE_UNKNOWN
-                                ? icky_detect_engine()
-                                : choices.engine),
-           static_cast<int>(choices.mode));
+    icky_engine eng = choices.engine;
+    if (eng == ICKY_ENGINE_UNKNOWN)
+        eng = icky_detect_engine();
+    if (eng == ICKY_ENGINE_UNKNOWN)
+        eng = ICKY_ENGINE_IL2CPP;
 
-    return icky_run(choices.engine, choices.mode,
+    char buf[64];
+    _snprintf_s(buf, sizeof(buf), _TRUNCATE, "4c dump eng=%d", (int)eng);
+    icky::step_log(buf);
+
+    return icky_run(eng, choices.mode,
                     choices.out_dir.empty() ? nullptr : choices.out_dir.c_str());
 }
 

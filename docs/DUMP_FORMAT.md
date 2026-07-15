@@ -42,7 +42,17 @@ The [Icky Dumps](../web) website and community uploads all speak this schema.
     "enums": 749,
     "functions": 6079,
     "globals": 10,
-    "packages": 42
+    "packages": 42,
+    "encrypted_fields": 79,
+    "encrypted_with_decrypt": 79,
+    "encrypted_with_algo": 11
+  },
+  "encryption": {
+    "scheme": "il2cpp_encrypted_handle",
+    "note": "encrypted=true fields are Facepunch-style wrappers; use field.decrypt …",
+    "fields_total": 79,
+    "fields_with_decrypt": 79,
+    "fields_with_algo": 11
   },
   "globals": [
     {
@@ -69,7 +79,23 @@ The [Icky Dumps](../web) website and community uploads all speak this schema.
       "address": "0x...",
       "rva": "0x0",
       "fields": [
-        { "name": "PrimaryActorTick", "offset": 40, "size": 48, "type": "FTickFunction" }
+        {
+          "name": "playerEyes",
+          "offset": 896,
+          "size": 0,
+          "type": "Encrypted<PlayerEyes>",
+          "encrypted": true,
+          "decrypt": {
+            "getter_rva": "0x29D04C0",
+            "decrypt_rva": "0x1B28EE0",
+            "typeinfo_rva": "0xFC7D500",
+            "algo": "ADD_0xbcfc6da8;ROL19;ROL10;XOR_0x73437527;",
+            "inner_type": "PlayerEyes",
+            "xor": ["0x73437527"],
+            "add": ["0xBCFC6DA8"],
+            "rol": [19, 10]
+          }
+        }
       ],
       "methods": [
         { "name": "BeginPlay", "rva": "0x0", "flags": 0 }

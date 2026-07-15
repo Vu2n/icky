@@ -13,34 +13,24 @@ public:
     const char* name() const override { return "Unreal"; }
 
     DetectResult detect() const override {
+        // Detect must stay cheap: no pattern scans (those crash protected titles on inject).
         DetectResult d;
-        if (find_module("GameAssembly")) {
+        if (find_module_handle("GameAssembly.dll")) {
             d.detail = "GameAssembly present (prefer IL2CPP)";
             return d;
         }
-
-        auto mod = ue::find_game_module();
-        if (!mod.base) {
-            d.detail = "no game module";
-            return d;
-        }
-        d.primary = mod;
-
-        const bool shipping = mod.name.find("Shipping") != std::string::npos ||
-                              mod.name.find("Win64") != std::string::npos;
-        // Light pattern probe (first GObjects pattern only — full scan in dump)
-        bool pat = scan_ida(mod.base, mod.size,
-                            "48 8B 05 ?? ?? ?? ?? 48 8B 0C C8") != 0 ||
-                   scan_ida(mod.base, mod.size,
-                            "48 8B 05 ?? ?? ?? ?? 48 8B 0C C8 48 8D 04 D1") != 0;
-
-        if (shipping || pat || mod.size > 0x2000000) {
+        auto pn = process_name();
+        const bool shipping = pn.find("Shipping") != std::string::npos ||
+                              pn.find("Win64") != std::string::npos;
+        if (shipping) {
             d.matched = true;
-            d.confidence = pat ? 0.9f : (shipping ? 0.75f : 0.5f);
-            d.detail = mod.name + (pat ? " (GObjects pattern)" : " (shipping/size heuristic)");
+            d.confidence = 0.6f;
+            d.detail = pn + " (shipping name heuristic)";
+            if (auto m = find_module_handle(pn.c_str()))
+                d.primary = *m;
             return d;
         }
-        d.detail = "weak UE signals on " + mod.name;
+        d.detail = "no UE module signals";
         return d;
     }
 

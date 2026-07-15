@@ -139,9 +139,31 @@ bool write_icky_dump_json(const SdkModel& model, icky_sdk_mode mode, const std::
         if (!t.ns.empty()) packages.insert(t.ns);
     }
 
-    const std::string exe = model.game_name.empty() ? model.primary_module.name : model.game_name;
-    const std::string slug = make_game_slug(exe);
+    // Prefer process exe (RustClient.exe) over module (GameAssembly.dll) for catalog slug
+    std::string exe = model.game_name;
+    if (exe.empty() || exe == "GameAssembly.dll" || exe == "GameAssembly" ||
+        exe == "UserAssembly.dll") {
+        exe = model.primary_module.name;
+        // still bad — keep as last resort
+    }
+    // Strip .exe for nicer display name when we have a real process name
     const std::string display = game_display_name(exe);
+    const std::string slug = make_game_slug(display.empty() ? exe : display);
+
+    // Encryption stats (IL2CPP / Rust)
+    int enc_fields = 0, enc_with_decrypt = 0, enc_with_algo = 0;
+    for (auto& t : model.types) {
+        for (auto& f : t.fields) {
+            if (f.is_encrypted || f.decrypt.valid)
+                ++enc_fields;
+            if (f.decrypt.valid && f.decrypt.decrypt_rva)
+                ++enc_with_decrypt;
+            if (f.decrypt.valid &&
+                (!f.decrypt.xor_imms.empty() || !f.decrypt.rol_amounts.empty() ||
+                 !f.decrypt.add_imms.empty()))
+                ++enc_with_algo;
+        }
+    }
 
     os << "{\n";
     os << "  \"schema\": \"icky.dump/v1\",\n";
@@ -170,8 +192,21 @@ bool write_icky_dump_json(const SdkModel& model, icky_sdk_mode mode, const std::
     os << "    \"enums\": " << enums << ",\n";
     os << "    \"functions\": " << functions << ",\n";
     os << "    \"globals\": " << model.globals.size() << ",\n";
-    os << "    \"packages\": " << packages.size() << "\n";
+    os << "    \"packages\": " << packages.size() << ",\n";
+    os << "    \"encrypted_fields\": " << enc_fields << ",\n";
+    os << "    \"encrypted_with_decrypt\": " << enc_with_decrypt << ",\n";
+    os << "    \"encrypted_with_algo\": " << enc_with_algo << "\n";
     os << "  },\n";
+    if (enc_with_decrypt > 0) {
+        os << "  \"encryption\": {\n";
+        os << "    \"scheme\": \"il2cpp_encrypted_handle\",\n";
+        os << "    \"note\": \"encrypted=true fields are Facepunch-style wrappers; "
+              "use field.decrypt getter_rva/decrypt_rva/xor/rol/add to resolve\",\n";
+        os << "    \"fields_total\": " << enc_fields << ",\n";
+        os << "    \"fields_with_decrypt\": " << enc_with_decrypt << ",\n";
+        os << "    \"fields_with_algo\": " << enc_with_algo << "\n";
+        os << "  },\n";
+    }
 
     // layout from metadata if present
     os << "  \"layout\": {\n";
@@ -223,7 +258,44 @@ bool write_icky_dump_json(const SdkModel& model, icky_sdk_mode mode, const std::
             os << "        { \"name\": \"" << json_escape(f.name)
                << "\", \"offset\": " << f.offset
                << ", \"size\": " << f.size
-               << ", \"type\": \"" << json_escape(f.type_name) << "\" }"
+               << ", \"type\": \"" << json_escape(f.type_name) << "\""
+               << ", \"static\": " << (f.is_static ? "true" : "false")
+               << ", \"encrypted\": " << (f.is_encrypted ? "true" : "false");
+            if (f.decrypt.valid && f.decrypt.decrypt_rva) {
+                os << ", \"decrypt\": { \"getter_rva\": \"" << hex_u64(f.decrypt.getter_rva)
+                   << "\", \"decrypt_rva\": \"" << hex_u64(f.decrypt.decrypt_rva)
+                   << "\", \"typeinfo_rva\": \"" << hex_u64(f.decrypt.typeinfo_rva)
+                   << "\", \"algo\": \"" << json_escape(f.decrypt.algo_summary)
+                   << "\", \"inner_type\": \"" << json_escape(f.decrypt.inner_type) << "\"";
+                if (!f.decrypt.xor_imms.empty()) {
+                    os << ", \"xor\": [";
+                    for (size_t i = 0; i < f.decrypt.xor_imms.size(); ++i) {
+                        if (i) os << ", ";
+                        os << "\"" << hex_u64(f.decrypt.xor_imms[i]) << "\"";
+                    }
+                    os << "]";
+                }
+                if (!f.decrypt.add_imms.empty()) {
+                    os << ", \"add\": [";
+                    for (size_t i = 0; i < f.decrypt.add_imms.size(); ++i) {
+                        if (i) os << ", ";
+                        os << "\"" << hex_u64(f.decrypt.add_imms[i]) << "\"";
+                    }
+                    os << "]";
+                }
+                if (!f.decrypt.rol_amounts.empty()) {
+                    os << ", \"rol\": [";
+                    for (size_t i = 0; i < f.decrypt.rol_amounts.size(); ++i) {
+                        if (i) os << ", ";
+                        os << f.decrypt.rol_amounts[i];
+                    }
+                    os << "]";
+                }
+                os << " }";
+            }
+            if (!f.comment.empty())
+                os << ", \"comment\": \"" << json_escape(f.comment) << "\"";
+            os << " }"
                << (fi + 1 < t.fields.size() ? "," : "") << "\n";
         }
         os << "      ],\n";
@@ -231,9 +303,23 @@ bool write_icky_dump_json(const SdkModel& model, icky_sdk_mode mode, const std::
         for (size_t mi = 0; mi < t.methods.size(); ++mi) {
             auto& m = t.methods[mi];
             os << "        { \"name\": \"" << json_escape(m.name)
+               << "\", \"return_type\": \"" << json_escape(m.return_type)
                << "\", \"rva\": \"" << hex_u64(m.rva)
                << "\", \"address\": \"" << hex_u64(m.address)
-               << "\", \"flags\": " << m.flags << " }"
+               << "\", \"flags\": " << m.flags
+               << ", \"static\": " << (m.is_static ? "true" : "false");
+            if (!m.comment.empty())
+                os << ", \"comment\": \"" << json_escape(m.comment) << "\"";
+            if (!m.params.empty()) {
+                os << ", \"params\": [";
+                for (size_t pi = 0; pi < m.params.size(); ++pi) {
+                    if (pi) os << ", ";
+                    os << "{ \"name\": \"" << json_escape(m.params[pi].name)
+                       << "\", \"type\": \"" << json_escape(m.params[pi].type_name) << "\" }";
+                }
+                os << "]";
+            }
+            os << " }"
                << (mi + 1 < t.methods.size() ? "," : "") << "\n";
         }
         os << "      ],\n";

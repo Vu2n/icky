@@ -6,21 +6,20 @@ import {
   AlertCircle,
   FolderOpen,
   Download,
-  Eye,
-  Bookmark,
   ArrowRight,
   Paperclip,
   Sparkles,
 } from 'lucide-react'
 import type { IckyDump } from '../lib/types'
 import {
+  countEncryption,
   downloadDumpForSubmit,
   engineColor,
   estimateDumpSize,
   formatBytes,
+  hasEncryption,
   openSubmitIssue,
   pickDumpFromFiles,
-  saveLocalDump,
 } from '../lib/dump'
 import { Button } from '../components/ui/Button'
 
@@ -31,7 +30,6 @@ export function Upload() {
   const [error, setError] = useState<string | null>(null)
   const [dump, setDump] = useState<IckyDump | null>(null)
   const [fileSize, setFileSize] = useState(0)
-  const [saved, setSaved] = useState(false)
   const [busy, setBusy] = useState(false)
   const [submitHint, setSubmitHint] = useState(false)
 
@@ -48,7 +46,6 @@ export function Upload() {
   const ingest = useCallback(async (files: FileList | File[]) => {
     setBusy(true)
     setError(null)
-    setSaved(false)
     setSubmitHint(false)
     setDump(null)
     try {
@@ -59,9 +56,6 @@ export function Upload() {
       }
       setDump(result.dump)
       setFileSize(result.size)
-      // Auto-save locally so preview works immediately
-      saveLocalDump(result.dump)
-      setSaved(true)
     } finally {
       setBusy(false)
     }
@@ -228,6 +222,12 @@ export function Upload() {
                   ['Classes', dump.stats.classes],
                   ['Globals', dump.stats.globals],
                   ['Packages', dump.stats.packages ?? '—'],
+                  ...(hasEncryption(dump)
+                    ? ([
+                        ['Encrypted', countEncryption(dump).encrypted],
+                        ['Decrypts', countEncryption(dump).withDecrypt],
+                      ] as const)
+                    : []),
                 ] as const
               ).map(([k, v]) => (
                 <div key={k} className="rounded-xl bg-side px-3 py-2">
@@ -236,6 +236,15 @@ export function Upload() {
                 </div>
               ))}
             </dl>
+            {hasEncryption(dump) && (
+              <p className="mt-3 text-xs text-amber-200/90">
+                This dump includes Facepunch-style encrypted fields
+                {countEncryption(dump).withDecrypt > 0
+                  ? ` with ${countEncryption(dump).withDecrypt} recovered decrypt RVAs/algos`
+                  : ''}
+                . The site catalog tags it as <code className="text-amber-100">encrypted</code>.
+              </p>
+            )}
 
             {/* Primary publish path */}
             <div className="mt-8 rounded-2xl border border-accent/25 bg-accent/5 p-5">
@@ -262,14 +271,6 @@ export function Upload() {
                       Download & open issue
                       <ArrowRight size={16} />
                     </Button>
-                    <Button
-                      variant="outline"
-                      size="lg"
-                      href={`#/dump/${dump.game.slug}?src=local`}
-                    >
-                      <Eye size={16} />
-                      Preview
-                    </Button>
                   </div>
                 </div>
               </div>
@@ -295,19 +296,7 @@ export function Upload() {
               )}
             </div>
 
-            {/* Secondary actions */}
             <div className="mt-4 flex flex-wrap gap-2">
-              <Button
-                variant="ghost"
-                size="md"
-                onClick={() => {
-                  saveLocalDump(dump)
-                  setSaved(true)
-                }}
-              >
-                <Bookmark size={16} />
-                {saved ? 'Saved in this browser' : 'Save in this browser'}
-              </Button>
               <Button variant="ghost" size="md" onClick={() => downloadDumpForSubmit(dump)}>
                 <Download size={16} />
                 Download only
@@ -318,20 +307,11 @@ export function Upload() {
       )}
 
       {!dump && (
-        <div className="mt-10 grid gap-3 text-sm text-muted sm:grid-cols-2">
-          <div className="card-surface p-4">
-            <p className="font-medium text-text">Where is the file?</p>
-            <p className="mt-1">
-              After dumping: <code className="text-accent">icky_sdk_&lt;Game&gt;/icky.dump.json</code>
-            </p>
-          </div>
-          <div className="card-surface p-4">
-            <p className="font-medium text-text">Private only?</p>
-            <p className="mt-1">
-              Use <strong className="text-text">Save in this browser</strong> after drop — nothing
-              leaves your machine until you publish.
-            </p>
-          </div>
+        <div className="mt-10 card-surface p-4 text-sm text-muted">
+          <p className="font-medium text-text">Where is the file?</p>
+          <p className="mt-1">
+            After dumping: <code className="text-accent">icky_sdk_&lt;Game&gt;/icky.dump.json</code>
+          </p>
         </div>
       )}
     </section>
