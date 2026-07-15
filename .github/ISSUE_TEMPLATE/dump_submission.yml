@@ -9,12 +9,13 @@ body:
       value: |
         ## How to submit (easy)
 
-        1. Run **Icky** and grab `icky.dump.json`
-        2. **Drag that file into this issue** (GitHub will attach it)
-        3. Fill the fields below and submit
+        1. Run **Icky** → open the site **Upload** page and drop `icky.dump.json`
+        2. Click **Download for GitHub** (for large games this is **slim + .gz** — GitHub issues max ~25 MB)
+        3. **Drag that downloaded file into this issue** and submit
 
-        If this game is **already** in the catalog (same `game.slug`), your dump **updates**
-        that entry. New games are added as a new catalog entry.
+        Full Rust dumps are often 100–250 MB raw — **do not** attach the full file; use slim/gz from the site.
+
+        Same `game.slug` **updates** the catalog entry.
   - type: input
     id: game
     attributes:
@@ -50,7 +51,7 @@ body:
     attributes:
       label: Confirm
       options:
-        - label: I attached icky.dump.json to this issue
+        - label: I attached icky.dump.json or icky.dump.json.gz (under ~25 MB) to this issue
           required: true
         - label: This dump is from software I am allowed to reverse / dump
           required: true

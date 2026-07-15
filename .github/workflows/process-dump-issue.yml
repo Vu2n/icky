@@ -20,29 +20,73 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract attachment URL
+      - name: Extract attachment / dump URL
         id: attach
         uses: actions/github-script@v7
         with:
           script: |
-            const body = context.payload.issue.body || ''
             const patterns = [
-              /https:\/\/github\.com\/user-attachments\/files\/\d+\/[^\s)"']+/g,
-              /https:\/\/github\.com\/[\w-]+\/[\w.-]+\/files\/\d+\/[^\s)"']+/g,
+              /https:\/\/github\.com\/user-attachments\/files\/\d+\/[^\s)"'<>]+/gi,
+              /https:\/\/github\.com\/[\w-]+\/[\w.-]+\/files\/\d+\/[^\s)"'<>]+/gi,
+              // Optional: paste a raw URL in the issue (for large dumps hosted elsewhere)
+              /https:\/\/[^\s)"'<>]+\.json(?:\.gz)?(?:\?[^\s)"'<>]*)?/gi,
             ]
-            let url = null
-            for (const re of patterns) {
-              const m = body.match(re)
-              if (m && m.length) { url = m[0].replace(/[>\]).,]+$/, ''); break }
+
+            function pickUrl(text) {
+              if (!text) return null
+              const found = []
+              for (const re of patterns) {
+                const m = text.match(re)
+                if (m) found.push(...m)
+              }
+              if (!found.length) return null
+              const cleaned = found.map(u => u.replace(/[>\])},.]+$/g, ''))
+              // Prefer github user-attachments, then .json.gz, then .json
+              const attach = cleaned.find(u => u.includes('user-attachments'))
+              if (attach) return attach
+              const gz = cleaned.find(u => /\.json\.gz(\?|$)/i.test(u))
+              if (gz) return gz
+              const js = cleaned.find(u => /\.json(\?|$)/i.test(u))
+              return js || cleaned[0]
             }
+
+            let body = context.payload.issue.body || ''
+            // Issue form body sometimes nests under ### headings — still plain markdown
+            let url = pickUrl(body)
+
+            // Also scan first page of comments (user may attach after opening)
             if (!url) {
-              core.setFailed('No dump attachment found. Attach icky.dump.json to the issue.')
+              const comments = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                per_page: 30,
+              })
+              for (const c of comments.data) {
+                url = pickUrl(c.body || '')
+                if (url) break
+              }
+            }
+
+            if (!url) {
+              const msg = [
+                'No dump file URL found on the issue.',
+                '',
+                '**How to fix:**',
+                '1. Attach `icky.dump.json` **or** `icky.dump.json.gz` (drag into the issue body).',
+                '2. GitHub issue attachments are limited to **~25 MB**. Full Rust dumps are often 100–250 MB.',
+                '3. On the site Upload page, use **Download for GitHub** — it exports a **slim + gzip** dump (methods stripped, fields/decrypt kept).',
+                '4. Or open a PR that adds `web/public/dumps/<slug>/dump.json` directly.',
+              ].join('\n')
+              core.setFailed(msg)
+              // Stash for the comment step
+              core.setOutput('error_detail', msg)
               return
             }
-            const all = body.match(patterns[0]) || []
-            const jsonish = all.find(u => /\.json($|\?)/i.test(u))
-            core.setOutput('url', jsonish || url)
-            core.info('Attachment: ' + (jsonish || url))
+
+            core.setOutput('url', url)
+            core.setOutput('error_detail', '')
+            core.info('Dump URL: ' + url)
 
       - name: Download & validate dump
         env:
@@ -51,37 +95,57 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/icky-dump
+          echo "Downloading: $ATTACH_URL"
+          # user-attachments often need auth + octet-stream
           curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/octet-stream" \
-            -L "$ATTACH_URL" -o /tmp/icky-dump/raw.bin || true
-          if ! head -c 1 /tmp/icky-dump/raw.bin | grep -q '{'; then
-            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -L "$ATTACH_URL" -o /tmp/icky-dump/raw.bin
-          fi
+            -L "$ATTACH_URL" -o /tmp/icky-dump/raw.bin \
+            || curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -L "$ATTACH_URL" -o /tmp/icky-dump/raw.bin
+
           python3 - <<'PY'
-          import json, sys
-          p="/tmp/icky-dump/raw.bin"
-          with open(p,"rb") as f:
-              data=f.read()
-          if data.startswith(b"\xef\xbb\xbf"):
-              data=data[3:]
+          import gzip, json, sys
+          from pathlib import Path
+
+          raw = Path("/tmp/icky-dump/raw.bin").read_bytes()
+          print("Downloaded bytes:", len(raw))
+
+          # Strip UTF-8 BOM
+          if raw.startswith(b"\xef\xbb\xbf"):
+              raw = raw[3:]
+
+          # Gzip (icky.dump.json.gz or magic)
+          if raw[:2] == b"\x1f\x8b":
+              print("Detected gzip")
+              raw = gzip.decompress(raw)
+
           try:
-              dump=json.loads(data.decode("utf-8"))
+              text = raw.decode("utf-8")
+          except UnicodeDecodeError as e:
+              print("Not UTF-8 text:", e)
+              sys.exit(1)
+
+          try:
+              dump = json.loads(text)
           except Exception as e:
               print("JSON parse failed:", e)
+              print("First 200 chars:", text[:200])
               sys.exit(1)
-          if not str(dump.get("schema","")).startswith("icky.dump"):
+
+          if not str(dump.get("schema", "")).startswith("icky.dump"):
               print("Bad schema:", dump.get("schema"))
               sys.exit(1)
-          game=dump.get("game") or {}
-          slug=(game.get("slug") or "").strip()
+
+          game = dump.get("game") or {}
+          slug = (game.get("slug") or "").strip()
           if not slug:
               print("Missing game.slug")
               sys.exit(1)
-          with open("/tmp/icky-dump/dump.json","w",encoding="utf-8") as f:
-              json.dump(dump,f,indent=2)
-              f.write("\n")
-          # Count encryption if stats missing (older dumps)
-          stats = dump.get("stats") or {}
+
+          Path("/tmp/icky-dump/dump.json").write_text(
+              json.dumps(dump, indent=2) + "\n", encoding="utf-8"
+          )
+
+          stats = dict(dump.get("stats") or {})
           enc_fields = stats.get("encrypted_fields")
           enc_dec = stats.get("encrypted_with_decrypt")
           if enc_fields is None or enc_dec is None:
@@ -92,21 +156,21 @@ jobs:
                           enc_fields += 1
                       if (f.get("decrypt") or {}).get("decrypt_rva"):
                           enc_dec += 1
-              stats = dict(stats)
               stats["encrypted_fields"] = enc_fields
               stats["encrypted_with_decrypt"] = enc_dec
-          with open("/tmp/icky-dump/meta.json","w",encoding="utf-8") as f:
-              json.dump({
-                "slug": slug,
-                "game": game.get("name", slug),
-                "executable": game.get("executable",""),
-                "engine": (dump.get("engine") or {}).get("id","unknown"),
-                "engine_label": (dump.get("engine") or {}).get("label","Unknown"),
-                "mode": dump.get("mode","internal"),
-                "generated_at": dump.get("generated_at",""),
-                "stats": stats,
-                "encrypted": bool(enc_dec or enc_fields or dump.get("encryption")),
-              }, f)
+
+          meta = {
+              "slug": slug,
+              "game": game.get("name", slug),
+              "executable": game.get("executable", ""),
+              "engine": (dump.get("engine") or {}).get("id", "unknown"),
+              "engine_label": (dump.get("engine") or {}).get("label", "Unknown"),
+              "mode": dump.get("mode", "internal"),
+              "generated_at": dump.get("generated_at", ""),
+              "stats": stats,
+              "encrypted": bool(enc_dec or enc_fields or dump.get("encryption")),
+          }
+          Path("/tmp/icky-dump/meta.json").write_text(json.dumps(meta), encoding="utf-8")
           print("OK slug=", slug, "types=", stats.get("types"), "enc_decrypt=", enc_dec)
           PY
 
@@ -120,7 +184,6 @@ jobs:
           echo "game=$GAME" >> "$GITHUB_OUTPUT"
 
           mkdir -p "web/public/dumps/$SLUG"
-          # Overwrite dump.json for this slug (update path)
           cp /tmp/icky-dump/dump.json "web/public/dumps/$SLUG/dump.json"
 
           python3 - <<'PY'
@@ -165,12 +228,11 @@ jobs:
 
           dumps = cat.get("dumps") or []
           existed = any(d.get("slug") == meta["slug"] for d in dumps)
-          # Same game slug → replace entry; keep others
           dumps = [d for d in dumps if d.get("slug") != meta["slug"]]
           dumps.insert(0, entry)
 
           cat["schema"] = "icky.catalog/v1"
-          cat.pop("mode", None)  # remove single-game mode if present
+          cat.pop("mode", None)
           cat["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
           cat["dumps"] = dumps
           cat_path.write_text(json.dumps(cat, indent=2) + "\n", encoding="utf-8")
@@ -205,6 +267,7 @@ jobs:
             const slug = '${{ steps.patch.outputs.slug }}'
             const game = '${{ steps.patch.outputs.game }}'
             const action = '${{ steps.patch.outputs.action }}'
+            const detail = `${{ steps.attach.outputs.error_detail }}` || ''
             let body
             if (outcome === 'success') {
               const verb = action === 'updated' ? 'updated' : 'added'
@@ -215,9 +278,21 @@ jobs:
                 `View: https://${context.repo.owner.toLowerCase()}.github.io/${context.repo.repo}/#/dump/${slug}\n\n` +
                 `Thanks @${context.payload.issue.user.login}!`
             } else {
-              body = `❌ Could not ingest this dump.\n\n` +
-                `Attach \`icky.dump.json\` (schema \`icky.dump/v1\`) and try again.\n` +
-                `Logs: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions`
+              body = `❌ **Could not ingest this dump.**\n\n`
+              if (detail && detail.includes('No dump file')) {
+                body += detail + '\n\n'
+              } else {
+                body += [
+                  'Common causes:',
+                  '- **No file attached** (or attach failed silently)',
+                  '- **File too large** — GitHub issue uploads max ~**25 MB**. Full Rust dumps are often 100–250 MB.',
+                  '- Wrong file (need `icky.dump.json` or `icky.dump.json.gz`, schema `icky.dump/v1`)',
+                  '',
+                  '**Fix for large dumps:** open the site **Upload** page → **Download for GitHub** (slim + gzip) → attach that file.',
+                  '',
+                ].join('\n')
+              }
+              body += `Logs: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions`
             }
             await github.rest.issues.createComment({
               owner: context.repo.owner,

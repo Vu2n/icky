@@ -13,6 +13,7 @@ import {
 import type { IckyDump } from '../lib/types'
 import {
   countEncryption,
+  downloadDumpForGitHubIssue,
   downloadDumpForSubmit,
   engineColor,
   estimateDumpSize,
@@ -20,6 +21,7 @@ import {
   hasEncryption,
   openSubmitIssue,
   pickDumpFromFiles,
+  slimDumpForPublish,
 } from '../lib/dump'
 import { Button } from '../components/ui/Button'
 
@@ -41,7 +43,15 @@ export function Upload() {
     return formatBytes(n)
   }, [dump, fileSize])
 
-  const tooBigForIssue = fileSize > 24 * 1024 * 1024
+  const tooBigForIssue = fileSize > 20 * 1024 * 1024
+  const slimSize = useMemo(() => {
+    if (!dump) return 0
+    try {
+      return new Blob([JSON.stringify(slimDumpForPublish(dump))]).size
+    } catch {
+      return 0
+    }
+  }, [dump])
 
   const ingest = useCallback(async (files: FileList | File[]) => {
     setBusy(true)
@@ -67,13 +77,31 @@ export function Upload() {
     if (e.dataTransfer.files?.length) void ingest(e.dataTransfer.files)
   }
 
-  const publish = () => {
+  const [publishBusy, setPublishBusy] = useState(false)
+  const [publishNote, setPublishNote] = useState<string | null>(null)
+
+  const publish = async () => {
     if (!dump) return
-    // 1) Download with stable name so attach is one drag
-    downloadDumpForSubmit(dump)
-    // 2) Open pre-filled GitHub issue
-    openSubmitIssue(dump)
-    setSubmitHint(true)
+    setPublishBusy(true)
+    setPublishNote(null)
+    try {
+      // Large dumps: slim (+ gzip) so GitHub issue attach works (~25MB limit)
+      if (tooBigForIssue) {
+        const r = await downloadDumpForGitHubIssue(dump)
+        setPublishNote(
+          `Downloaded ${r.filename} (${formatBytes(r.bytes)}) — slim for GitHub. Attach that file.`,
+        )
+      } else {
+        downloadDumpForSubmit(dump)
+        setPublishNote('Downloaded icky.dump.json — attach it on the issue.')
+      }
+      openSubmitIssue(dump)
+      setSubmitHint(true)
+    } catch (e) {
+      setPublishNote(e instanceof Error ? e.message : 'Download failed')
+    } finally {
+      setPublishBusy(false)
+    }
   }
 
   return (
@@ -261,14 +289,23 @@ export function Upload() {
                   </p>
                   {tooBigForIssue && (
                     <p className="mt-2 text-xs text-amber-300/90">
-                      This dump is over ~24&nbsp;MB. GitHub issue attachments may reject it — use
-                      “Download only” and open a PR, or split / re-dump.
+                      Full dump is <strong>{sizeLabel}</strong> — GitHub issues only accept ~25&nbsp;MB.
+                      Publish will download a <strong>slim + gzip</strong> file (methods stripped;
+                      fields &amp; decrypts kept
+                      {slimSize ? ` · ~${formatBytes(slimSize)} before gzip` : ''}).
                     </p>
                   )}
+                  {publishNote && (
+                    <p className="mt-2 text-xs text-good">{publishNote}</p>
+                  )}
                   <div className="mt-4 flex flex-wrap gap-3">
-                    <Button size="lg" onClick={publish}>
+                    <Button size="lg" disabled={publishBusy} onClick={() => void publish()}>
                       <Paperclip size={16} />
-                      Download & open issue
+                      {publishBusy
+                        ? 'Preparing…'
+                        : tooBigForIssue
+                          ? 'Download slim for GitHub & open issue'
+                          : 'Download & open issue'}
                       <ArrowRight size={16} />
                     </Button>
                   </div>
@@ -279,18 +316,13 @@ export function Upload() {
                 <ol className="mt-5 space-y-2 rounded-xl border border-white/[0.06] bg-bg/60 p-4 text-sm text-muted">
                   <li className="flex gap-2">
                     <span className="font-display font-bold text-accent">1.</span>
-                    Your browser downloaded <code className="text-text">icky.dump.json</code> (check
-                    Downloads).
+                    Attach the file from Downloads (
+                    <code className="text-text">icky.dump.json</code> or{' '}
+                    <code className="text-text">icky.dump.json.gz</code>) to the issue.
                   </li>
                   <li className="flex gap-2">
                     <span className="font-display font-bold text-accent">2.</span>
-                    On the GitHub issue page, <strong className="text-text">drag that file</strong>{' '}
-                    into the comment box (or use the paperclip).
-                  </li>
-                  <li className="flex gap-2">
-                    <span className="font-display font-bold text-accent">3.</span>
-                    Click <strong className="text-text">Submit new issue</strong> — a bot validates
-                    and opens a PR.
+                    Submit — the bot validates and publishes to the catalog.
                   </li>
                 </ol>
               )}
@@ -299,8 +331,18 @@ export function Upload() {
             <div className="mt-4 flex flex-wrap gap-2">
               <Button variant="ghost" size="md" onClick={() => downloadDumpForSubmit(dump)}>
                 <Download size={16} />
-                Download only
+                Download full JSON
               </Button>
+              {tooBigForIssue && (
+                <Button
+                  variant="ghost"
+                  size="md"
+                  onClick={() => void downloadDumpForGitHubIssue(dump)}
+                >
+                  <Download size={16} />
+                  Download slim for GitHub only
+                </Button>
+              )}
             </div>
           </div>
         </div>

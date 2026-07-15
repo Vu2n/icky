@@ -121,6 +121,70 @@ export function downloadDumpForSubmit(dump: IckyDump) {
   downloadJson('icky.dump.json', dump)
 }
 
+/**
+ * Strip method lists so huge IL2CPP dumps fit GitHub issue attachments (~25MB).
+ * Keeps fields, decrypt metadata, globals — enough for catalog + site SDK gen.
+ */
+export function slimDumpForPublish(dump: IckyDump): IckyDump {
+  const types = (dump.types || []).map((t) => {
+    const { methods: _m, ...rest } = t
+    return {
+      ...rest,
+      // Keep empty array so schema stays valid; methods are optional for site SDK
+      methods: [] as typeof t.methods,
+    }
+  })
+  return {
+    ...dump,
+    types,
+    layout: {
+      ...(dump.layout || {}),
+      publish_slim: '1',
+      publish_note: 'methods stripped for GitHub issue size limit',
+    },
+  }
+}
+
+/** Gzip bytes (browser CompressionStream) */
+export async function gzipBytes(data: Uint8Array): Promise<Uint8Array> {
+  if (typeof CompressionStream === 'undefined') {
+    throw new Error('Gzip not supported in this browser — use slim JSON without .gz')
+  }
+  const stream = new Blob([data.buffer as ArrayBuffer])
+    .stream()
+    .pipeThrough(new CompressionStream('gzip'))
+  const buf = await new Response(stream).arrayBuffer()
+  return new Uint8Array(buf)
+}
+
+/** Download slim (and preferably gzipped) dump for attaching to a GitHub issue */
+export async function downloadDumpForGitHubIssue(dump: IckyDump): Promise<{
+  filename: string
+  bytes: number
+  slimmed: boolean
+}> {
+  const slim = slimDumpForPublish(dump)
+  const json = JSON.stringify(slim)
+  const raw = new TextEncoder().encode(json)
+  let out: Uint8Array = raw
+  let filename = 'icky.dump.json'
+  try {
+    out = await gzipBytes(raw)
+    filename = 'icky.dump.json.gz'
+  } catch {
+    /* plain slim json */
+  }
+  const blob = new Blob([out.buffer as ArrayBuffer], {
+    type: filename.endsWith('.gz') ? 'application/gzip' : 'application/json',
+  })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(a.href)
+  return { filename, bytes: out.length, slimmed: true }
+}
+
 export function formatDate(iso: string): string {
   try {
     return new Date(iso).toLocaleString(undefined, {
