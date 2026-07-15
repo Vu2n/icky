@@ -1,5 +1,28 @@
 {
   "schema": "icky.catalog/v1",
-  "updated_at": null,
-  "dumps": []
+  "updated_at": "2026-07-15T13:47:37Z",
+  "dumps": [
+    {
+      "slug": "avf2",
+      "game": "AVF2",
+      "executable": "AVF2-Win64-Shipping.exe",
+      "engine": "unreal",
+      "engine_label": "Unreal Engine",
+      "mode": "external",
+      "generated_at": "2026-07-15T13:21:46Z",
+      "stats": {
+        "types": 4056,
+        "classes": 1981,
+        "globals": 10,
+        "packages": 191
+      },
+      "path": "dumps/avf2/dump.json",
+      "featured": false,
+      "tags": [
+        "unreal",
+        "external",
+        "community"
+      ]
+    }
+  ]
 }
