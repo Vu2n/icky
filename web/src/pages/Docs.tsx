@@ -30,13 +30,25 @@ export function Docs() {
         <h2 className="pt-4 font-display text-lg font-semibold text-text">From the dumper</h2>
         <pre className="overflow-x-auto rounded-lg bg-side p-4 font-mono text-xs text-accent">
 {`icky_sdk_<Game>/
-  icky.dump.json          ← upload this
+  icky.dump.json          ← share this
   internal/unreal/
     icky.dump.json
     Offsets.hpp
     SDK.hpp
     ...`}
         </pre>
+
+        <h2 className="pt-4 font-display text-lg font-semibold text-text">Easiest publish path</h2>
+        <ol className="list-decimal space-y-1 pl-5">
+          <li>
+            Open <a className="text-accent hover:underline" href="#/upload">Share a dump</a>
+          </li>
+          <li>Drop the JSON (or whole dump folder)</li>
+          <li>
+            Click <strong className="text-text">Download &amp; open issue</strong>
+          </li>
+          <li>Drag the file onto the GitHub issue and submit — a bot opens the catalog PR</li>
+        </ol>
 
         <h2 className="pt-4 font-display text-lg font-semibold text-text">Full docs</h2>
         <p>

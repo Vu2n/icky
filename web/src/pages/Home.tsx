@@ -51,12 +51,12 @@ export function Home() {
             </motion.p>
 
             <motion.div variants={fadeUp} className="mt-9 flex flex-wrap gap-3">
-              <Button href="#/dumps" size="lg">
-                Browse dumps
+              <Button href="#/upload" size="lg">
+                Share a dump
                 <ArrowRight size={16} />
               </Button>
-              <Button href="#/upload" variant="outline" size="lg">
-                Upload yours
+              <Button href="#/dumps" variant="outline" size="lg">
+                Browse catalog
               </Button>
             </motion.div>
 
@@ -88,8 +88,8 @@ export function Home() {
               },
               {
                 icon: Upload,
-                title: 'Community upload',
-                body: 'Validate dumps in the browser, save a personal library, or open a PR pack.',
+                title: 'Drop → issue → done',
+                body: 'Validate in the browser, open a pre-filled GitHub issue, attach the file. A bot opens the PR.',
               },
               {
                 icon: Shield,

@@ -1,67 +1,126 @@
-import { useCallback, useState } from 'react'
-import { Upload as UploadIcon, FileJson, CheckCircle2, AlertCircle } from 'lucide-react'
+import { useCallback, useMemo, useState } from 'react'
+import {
+  Upload as UploadIcon,
+  FileJson,
+  CheckCircle2,
+  AlertCircle,
+  FolderOpen,
+  Download,
+  Eye,
+  Bookmark,
+  ArrowRight,
+  Paperclip,
+  Sparkles,
+} from 'lucide-react'
 import type { IckyDump } from '../lib/types'
 import {
-  catalogFromDump,
-  downloadJson,
+  downloadDumpForSubmit,
+  engineColor,
+  estimateDumpSize,
+  formatBytes,
+  openSubmitIssue,
+  pickDumpFromFiles,
   saveLocalDump,
-  validateDump,
 } from '../lib/dump'
 import { Button } from '../components/ui/Button'
+
+type Step = 'drop' | 'ready'
 
 export function Upload() {
   const [drag, setDrag] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [dump, setDump] = useState<IckyDump | null>(null)
+  const [fileSize, setFileSize] = useState(0)
   const [saved, setSaved] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [submitHint, setSubmitHint] = useState(false)
 
-  const onFile = useCallback(async (file: File) => {
+  const step: Step = dump ? 'ready' : 'drop'
+
+  const sizeLabel = useMemo(() => {
+    if (!dump) return ''
+    const n = fileSize || estimateDumpSize(dump)
+    return formatBytes(n)
+  }, [dump, fileSize])
+
+  const tooBigForIssue = fileSize > 24 * 1024 * 1024
+
+  const ingest = useCallback(async (files: FileList | File[]) => {
+    setBusy(true)
     setError(null)
     setSaved(false)
+    setSubmitHint(false)
     setDump(null)
     try {
-      const text = await file.text()
-      const json = JSON.parse(text) as unknown
-      const v = validateDump(json)
-      if (!v.ok) {
-        setError(v.error)
+      const result = await pickDumpFromFiles(files)
+      if (!result.ok) {
+        setError(result.error)
         return
       }
-      setDump(v.dump)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Invalid JSON')
+      setDump(result.dump)
+      setFileSize(result.size)
+      // Auto-save locally so preview works immediately
+      saveLocalDump(result.dump)
+      setSaved(true)
+    } finally {
+      setBusy(false)
     }
   }, [])
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setDrag(false)
-    const f = e.dataTransfer.files?.[0]
-    if (f) void onFile(f)
+    if (e.dataTransfer.files?.length) void ingest(e.dataTransfer.files)
   }
 
-  const save = () => {
+  const publish = () => {
     if (!dump) return
-    saveLocalDump(dump)
-    setSaved(true)
-  }
-
-  const prPack = () => {
-    if (!dump) return
-    const entry = catalogFromDump(dump)
-    // Download dump + suggested catalog snippet
-    downloadJson(`${dump.game.slug}.dump.json`, dump)
-    downloadJson(`${dump.game.slug}.catalog-entry.json`, entry)
+    // 1) Download with stable name so attach is one drag
+    downloadDumpForSubmit(dump)
+    // 2) Open pre-filled GitHub issue
+    openSubmitIssue(dump)
+    setSubmitHint(true)
   }
 
   return (
     <section className="mx-auto max-w-3xl px-5 pb-24 pt-28 sm:px-8">
-      <h1 className="font-display text-3xl font-bold tracking-tight">Upload a dump</h1>
-      <p className="mt-3 text-muted">
-        Drop an <code className="text-accent">icky.dump.json</code> from the Icky dumper. We validate
-        the schema in your browser — nothing is sent to a server.
+      <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-white/[0.07] bg-card/80 px-3 py-1 text-xs text-muted">
+        <Sparkles size={12} className="text-accent" />
+        Takes about 30 seconds
+      </div>
+      <h1 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">Share a dump</h1>
+      <p className="mt-3 max-w-xl text-muted">
+        Drop your <code className="text-accent">icky.dump.json</code> (or the whole dump folder). We
+        validate it here, then you attach it to a GitHub issue — a bot opens the PR for the catalog.
       </p>
 
+      {/* Steps */}
+      <ol className="mt-8 grid gap-2 sm:grid-cols-3">
+        {[
+          { n: '1', t: 'Drop dump', d: 'File or folder' },
+          { n: '2', t: 'We validate', d: 'icky.dump/v1' },
+          { n: '3', t: 'Publish', d: 'Issue + attach' },
+        ].map((s, i) => (
+          <li
+            key={s.n}
+            className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 text-sm ${
+              (step === 'drop' && i === 0) || (step === 'ready' && i >= 1)
+                ? 'border-accent/30 bg-accent/5'
+                : 'border-white/[0.06] bg-card/40'
+            }`}
+          >
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-frame font-display text-xs font-bold text-accent">
+              {s.n}
+            </span>
+            <div>
+              <p className="font-medium text-text">{s.t}</p>
+              <p className="text-xs text-dim">{s.d}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
+
+      {/* Drop zone */}
       <div
         onDragOver={(e) => {
           e.preventDefault()
@@ -69,92 +128,207 @@ export function Upload() {
         }}
         onDragLeave={() => setDrag(false)}
         onDrop={onDrop}
-        className={`mt-10 rounded-2xl border-2 border-dashed p-10 text-center transition-colors ${
+        className={`mt-8 rounded-2xl border-2 border-dashed p-10 text-center transition-colors ${
           drag
             ? 'border-accent bg-accent/5'
             : 'border-white/[0.08] bg-card/50 hover:border-white/[0.14]'
-        }`}
+        } ${busy ? 'opacity-60' : ''}`}
       >
         <UploadIcon className="mx-auto mb-4 text-accent" size={32} />
-        <p className="font-display text-lg font-semibold">Drop icky.dump.json here</p>
-        <p className="mt-2 text-sm text-muted">or pick a file</p>
-        <label className="mt-6 inline-block cursor-pointer">
-          <span className="inline-flex items-center gap-2 rounded-[12px] bg-accent px-5 py-2.5 text-sm font-medium text-[#0b0c0f]">
-            <FileJson size={16} />
-            Choose file
-          </span>
-          <input
-            type="file"
-            accept=".json,application/json"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0]
-              if (f) void onFile(f)
-            }}
-          />
-        </label>
+        <p className="font-display text-lg font-semibold">
+          {busy ? 'Reading…' : 'Drop icky.dump.json or a dump folder'}
+        </p>
+        <p className="mt-2 text-sm text-muted">
+          Works with the file next to your headers, or the whole{' '}
+          <code className="text-dim">icky_sdk_*</code> folder
+        </p>
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+          <label className="cursor-pointer">
+            <span className="inline-flex items-center gap-2 rounded-[12px] bg-accent px-5 py-2.5 text-sm font-medium text-[#0b0c0f] shadow-[0_8px_28px_-8px_rgb(123_140_210_/_0.55)]">
+              <FileJson size={16} />
+              Choose file
+            </span>
+            <input
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.length) void ingest(e.target.files)
+              }}
+            />
+          </label>
+          <label className="cursor-pointer">
+            <span className="inline-flex items-center gap-2 rounded-[12px] border border-white/[0.08] bg-frame/80 px-5 py-2.5 text-sm font-medium text-text hover:border-accent/40">
+              <FolderOpen size={16} />
+              Choose folder
+            </span>
+            <input
+              type="file"
+              multiple
+              className="hidden"
+              ref={(el) => {
+                if (el) {
+                  el.setAttribute('webkitdirectory', '')
+                  el.setAttribute('directory', '')
+                }
+              }}
+              onChange={(e) => {
+                if (e.target.files?.length) void ingest(e.target.files)
+              }}
+            />
+          </label>
+        </div>
       </div>
 
       {error && (
         <div className="mt-6 flex items-start gap-3 rounded-xl border border-bad/30 bg-bad/10 px-4 py-3 text-sm text-bad">
           <AlertCircle size={18} className="mt-0.5 shrink-0" />
           <div>
-            <p className="font-medium">Validation failed</p>
+            <p className="font-medium">Could not read dump</p>
             <p className="mt-1 opacity-90">{error}</p>
           </div>
         </div>
       )}
 
       {dump && (
-        <div className="card-surface mt-8 p-6">
-          <div className="mb-4 flex items-center gap-2 text-good">
-            <CheckCircle2 size={18} />
-            <span className="text-sm font-medium">Valid icky.dump/v1</span>
-          </div>
-          <h2 className="font-display text-xl font-semibold">{dump.game.name}</h2>
-          <p className="font-mono text-xs text-dim">{dump.game.executable}</p>
-          <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-            <div>
-              <dt className="text-dim">Engine</dt>
-              <dd className="font-medium">{dump.engine.label}</dd>
+        <div className="card-surface mt-8 overflow-hidden">
+          <div className="border-b border-white/[0.06] bg-good/5 px-6 py-3">
+            <div className="flex items-center gap-2 text-good">
+              <CheckCircle2 size={18} />
+              <span className="text-sm font-medium">Valid icky.dump/v1 · ready to publish</span>
             </div>
-            <div>
-              <dt className="text-dim">Types</dt>
-              <dd className="font-medium">{dump.stats.types}</dd>
-            </div>
-            <div>
-              <dt className="text-dim">Globals</dt>
-              <dd className="font-medium">{dump.stats.globals}</dd>
-            </div>
-            <div>
-              <dt className="text-dim">Mode</dt>
-              <dd className="font-medium">{dump.mode}</dd>
-            </div>
-          </dl>
-
-          <div className="mt-6 flex flex-wrap gap-3">
-            <Button onClick={save}>{saved ? 'Saved to library' : 'Save to my library'}</Button>
-            <Button variant="outline" href={`#/dump/${dump.game.slug}?src=local`}>
-              Open preview
-            </Button>
-            <Button variant="outline" onClick={prPack}>
-              Download PR pack
-            </Button>
           </div>
 
-          <div className="mt-8 rounded-xl border border-white/[0.06] bg-side p-4 text-sm text-muted">
-            <p className="font-medium text-text">Publish on GitHub Pages</p>
-            <ol className="mt-2 list-decimal space-y-1 pl-5">
-              <li>
-                Put dump at{' '}
-                <code className="text-accent">web/public/dumps/{dump.game.slug}/dump.json</code>
-              </li>
-              <li>
-                Add the catalog entry from the PR pack into{' '}
-                <code className="text-accent">web/public/dumps/catalog.json</code>
-              </li>
-              <li>Open a pull request — Actions will deploy the site</li>
-            </ol>
+          <div className="p-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h2 className="font-display text-2xl font-semibold">{dump.game.name}</h2>
+                <p className="mt-1 font-mono text-xs text-dim">{dump.game.executable}</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <span
+                    className={`rounded-md border px-2 py-0.5 text-[11px] font-medium ${engineColor(dump.engine.id)}`}
+                  >
+                    {dump.engine.label}
+                  </span>
+                  <span className="rounded-md border border-white/10 px-2 py-0.5 text-[11px] text-muted">
+                    {dump.mode}
+                  </span>
+                  <span className="rounded-md border border-white/10 px-2 py-0.5 text-[11px] text-dim">
+                    {sizeLabel}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <dl className="mt-6 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+              {(
+                [
+                  ['Types', dump.stats.types],
+                  ['Classes', dump.stats.classes],
+                  ['Globals', dump.stats.globals],
+                  ['Packages', dump.stats.packages ?? '—'],
+                ] as const
+              ).map(([k, v]) => (
+                <div key={k} className="rounded-xl bg-side px-3 py-2">
+                  <dt className="text-[10px] uppercase tracking-wider text-dim">{k}</dt>
+                  <dd className="font-display text-lg font-semibold">{v}</dd>
+                </div>
+              ))}
+            </dl>
+
+            {/* Primary publish path */}
+            <div className="mt-8 rounded-2xl border border-accent/25 bg-accent/5 p-5">
+              <div className="flex items-start gap-3">
+                <Paperclip className="mt-0.5 shrink-0 text-accent" size={22} />
+                <div className="min-w-0 flex-1">
+                  <p className="font-display text-lg font-semibold text-text">
+                    Publish to the public catalog
+                  </p>
+                  <p className="mt-1 text-sm text-muted">
+                    One click downloads <code className="text-accent">icky.dump.json</code> and opens
+                    a GitHub issue. Drag the file onto the issue, hit Submit — we open the PR.
+                  </p>
+                  {tooBigForIssue && (
+                    <p className="mt-2 text-xs text-amber-300/90">
+                      This dump is over ~24&nbsp;MB. GitHub issue attachments may reject it — use
+                      “Download only” and open a PR, or split / re-dump.
+                    </p>
+                  )}
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    <Button size="lg" onClick={publish}>
+                      <Paperclip size={16} />
+                      Download & open issue
+                      <ArrowRight size={16} />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="lg"
+                      href={`#/dump/${dump.game.slug}?src=local`}
+                    >
+                      <Eye size={16} />
+                      Preview
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              {submitHint && (
+                <ol className="mt-5 space-y-2 rounded-xl border border-white/[0.06] bg-bg/60 p-4 text-sm text-muted">
+                  <li className="flex gap-2">
+                    <span className="font-display font-bold text-accent">1.</span>
+                    Your browser downloaded <code className="text-text">icky.dump.json</code> (check
+                    Downloads).
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="font-display font-bold text-accent">2.</span>
+                    On the GitHub issue page, <strong className="text-text">drag that file</strong>{' '}
+                    into the comment box (or use the paperclip).
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="font-display font-bold text-accent">3.</span>
+                    Click <strong className="text-text">Submit new issue</strong> — a bot validates
+                    and opens a PR.
+                  </li>
+                </ol>
+              )}
+            </div>
+
+            {/* Secondary actions */}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button
+                variant="ghost"
+                size="md"
+                onClick={() => {
+                  saveLocalDump(dump)
+                  setSaved(true)
+                }}
+              >
+                <Bookmark size={16} />
+                {saved ? 'Saved in this browser' : 'Save in this browser'}
+              </Button>
+              <Button variant="ghost" size="md" onClick={() => downloadDumpForSubmit(dump)}>
+                <Download size={16} />
+                Download only
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!dump && (
+        <div className="mt-10 grid gap-3 text-sm text-muted sm:grid-cols-2">
+          <div className="card-surface p-4">
+            <p className="font-medium text-text">Where is the file?</p>
+            <p className="mt-1">
+              After dumping: <code className="text-accent">icky_sdk_&lt;Game&gt;/icky.dump.json</code>
+            </p>
+          </div>
+          <div className="card-surface p-4">
+            <p className="font-medium text-text">Private only?</p>
+            <p className="mt-1">
+              Use <strong className="text-text">Save in this browser</strong> after drop — nothing
+              leaves your machine until you publish.
+            </p>
           </div>
         </div>
       )}

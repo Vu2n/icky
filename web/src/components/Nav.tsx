@@ -61,7 +61,7 @@ export function Nav() {
 
         <div className="hidden md:block">
           <Button href="#/upload" size="md">
-            Upload dump
+            Share a dump
           </Button>
         </div>
 
@@ -91,7 +91,7 @@ export function Nav() {
             ))}
           </ul>
           <Button href="#/upload" className="mt-3 w-full" onClick={() => setOpen(false)}>
-            Upload dump
+            Share a dump
           </Button>
         </div>
       )}

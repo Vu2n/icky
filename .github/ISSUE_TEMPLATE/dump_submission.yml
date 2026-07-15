@@ -1,0 +1,55 @@
+name: Submit game dump
+description: Share an Icky icky.dump.json so it can be added to the public catalog
+title: "Dump: "
+labels:
+  - dump-submission
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## How to submit (easy)
+
+        1. Run **Icky** and grab `icky.dump.json`
+        2. **Drag that file into this issue** (GitHub will attach it)
+        3. Fill the fields below and submit
+
+        A bot will validate the dump and open a pull request for the catalog.
+  - type: input
+    id: game
+    attributes:
+      label: Game name
+      placeholder: AVF2
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Engine
+      options:
+        - unreal
+        - il2cpp
+        - mono
+        - source1
+        - source2
+        - unknown
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Game / build version (optional)
+      placeholder: "1.2.3 / CL 123456"
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes (optional)
+      placeholder: Patch notes, offsets that changed, etc.
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirm
+      options:
+        - label: I attached icky.dump.json to this issue
+          required: true
+        - label: This dump is from software I am allowed to reverse / dump
+          required: true

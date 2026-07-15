@@ -1,4 +1,5 @@
 import type { Catalog, CatalogEntry, IckyDump } from './types'
+import { buildDumpIssueUrl } from './site'
 
 const LOCAL_KEY = 'icky.community_dumps.v1'
 
@@ -67,7 +68,6 @@ export async function fetchCatalog(): Promise<Catalog> {
 }
 
 export async function fetchDump(path: string): Promise<IckyDump> {
-  // path is relative like dumps/foo/dump.json
   const url = path.startsWith('http')
     ? path
     : `${import.meta.env.BASE_URL}${path.replace(/^\//, '')}`
@@ -104,6 +104,11 @@ export function downloadJson(filename: string, data: unknown) {
   URL.revokeObjectURL(a.href)
 }
 
+/** Prefer browser "Save As" with a stable name for attaching to GitHub issues */
+export function downloadDumpForSubmit(dump: IckyDump) {
+  downloadJson('icky.dump.json', dump)
+}
+
 export function formatDate(iso: string): string {
   try {
     return new Date(iso).toLocaleString(undefined, {
@@ -112,5 +117,83 @@ export function formatDate(iso: string): string {
     })
   } catch {
     return iso
+  }
+}
+
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** Walk a FileList (including folder drops) and return the best dump candidate */
+export async function pickDumpFromFiles(files: FileList | File[]): Promise<
+  { ok: true; dump: IckyDump; file: File; size: number } | { ok: false; error: string }
+> {
+  const list = Array.from(files)
+  if (!list.length) return { ok: false, error: 'No files dropped' }
+
+  // Prefer icky.dump.json by name, then any .json
+  const ranked = [...list].sort((a, b) => {
+    const score = (f: File) => {
+      const n = f.name.toLowerCase()
+      const path = ((f as File & { webkitRelativePath?: string }).webkitRelativePath || n).toLowerCase()
+      if (n === 'icky.dump.json' || path.endsWith('/icky.dump.json')) return 0
+      if (n.endsWith('.icky.dump.json')) return 1
+      if (n.includes('icky') && n.endsWith('.json')) return 2
+      if (n.endsWith('.json')) return 3
+      return 9
+    }
+    return score(a) - score(b)
+  })
+
+  const errors: string[] = []
+  for (const file of ranked) {
+    if (!file.name.toLowerCase().endsWith('.json') && file.type && !file.type.includes('json')) {
+      continue
+    }
+    try {
+      const text = await file.text()
+      const json = JSON.parse(text) as unknown
+      const v = validateDump(json)
+      if (v.ok) {
+        return { ok: true, dump: v.dump, file, size: file.size }
+      }
+      errors.push(`${file.name}: ${v.error}`)
+    } catch (e) {
+      errors.push(`${file.name}: ${e instanceof Error ? e.message : 'parse error'}`)
+    }
+  }
+
+  if (errors.length) {
+    return {
+      ok: false,
+      error: errors.slice(0, 3).join(' · ') + (errors.length > 3 ? ' …' : ''),
+    }
+  }
+  return {
+    ok: false,
+    error: 'No icky.dump.json found. Drop the file from your dump folder (or the whole folder).',
+  }
+}
+
+export function openSubmitIssue(dump: IckyDump) {
+  const url = buildDumpIssueUrl({
+    game: dump.game.name,
+    engine: dump.engine.id,
+    slug: dump.game.slug,
+    types: dump.stats?.types ?? dump.types.length,
+    globals: dump.stats?.globals ?? dump.globals.length,
+    mode: dump.mode,
+  })
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+/** Approximate serialized size */
+export function estimateDumpSize(dump: IckyDump): number {
+  try {
+    return new Blob([JSON.stringify(dump)]).size
+  } catch {
+    return 0
   }
 }
