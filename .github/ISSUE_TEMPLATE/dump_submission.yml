@@ -13,8 +13,8 @@ body:
         2. **Drag that file into this issue** (GitHub will attach it)
         3. Fill the fields below and submit
 
-        This site hosts **one game only**. Your dump **replaces** whatever is currently live
-        (same game = update offsets; different game = switch the live title).
+        If this game is **already** in the catalog (same `game.slug`), your dump **updates**
+        that entry. New games are added as a new catalog entry.
   - type: input
     id: game
     attributes:

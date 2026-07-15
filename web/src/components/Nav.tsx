@@ -4,7 +4,7 @@ import { Button } from './ui/Button'
 
 const links = [
   { href: '#/', label: 'Home' },
-  { href: '#/dumps', label: 'Current' },
+  { href: '#/dumps', label: 'Dumps' },
   { href: '#/upload', label: 'Upload' },
   { href: '#/docs', label: 'Format' },
 ]

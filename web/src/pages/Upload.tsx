@@ -90,9 +90,9 @@ export function Upload() {
       </div>
       <h1 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">Share a dump</h1>
       <p className="mt-3 max-w-xl text-muted">
-        This site holds <strong className="text-text">one live game</strong>. Drop your{' '}
-        <code className="text-accent">icky.dump.json</code> — publishing <strong className="text-text">replaces</strong>{' '}
-        whatever is currently on the catalog (updates included).
+        Drop your <code className="text-accent">icky.dump.json</code> (or dump folder). If this game
+        is already on the catalog, publishing <strong className="text-text">updates</strong> it —
+        no duplicates.
       </p>
 
       {/* Steps */}
@@ -243,12 +243,12 @@ export function Upload() {
                 <Paperclip className="mt-0.5 shrink-0 text-accent" size={22} />
                 <div className="min-w-0 flex-1">
                   <p className="font-display text-lg font-semibold text-text">
-                    Publish / update live dump
+                    Publish or update
                   </p>
                   <p className="mt-1 text-sm text-muted">
                     Downloads <code className="text-accent">icky.dump.json</code> and opens a GitHub
-                    issue. Attach the file and submit — the bot replaces the single dump on the site
-                    (no multi-game catalog).
+                    issue. Attach the file and submit — the bot adds a new game or overwrites the
+                    existing dump for the same <code className="text-dim">game.slug</code>.
                   </p>
                   {tooBigForIssue && (
                     <p className="mt-2 text-xs text-amber-300/90">

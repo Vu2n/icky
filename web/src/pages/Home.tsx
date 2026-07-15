@@ -45,8 +45,8 @@ export function Home() {
             </motion.h1>
 
             <motion.p variants={fadeUp} className="mt-6 text-base leading-relaxed text-muted sm:text-lg">
-              One live game dump from the Icky dumper. When someone publishes an update, the
-              catalog is replaced so offsets stay current — Unreal, IL2CPP, Mono, or Source.
+              Browse community dumps from the Icky dumper. Same game again? Offsets get updated in
+              place. Unreal, IL2CPP, Mono, Source — multiple titles welcome.
             </motion.p>
 
             <motion.div variants={fadeUp} className="mt-9 flex flex-wrap gap-3">
@@ -64,9 +64,9 @@ export function Home() {
               className="mt-14 grid grid-cols-3 gap-4 border-t border-white/[0.06] pt-8"
             >
               {[
-                { k: 'Catalog', v: '1 game · always current' },
+                { k: 'Engines', v: 'UE · IL2CPP · Mono · Source' },
                 { k: 'Format', v: 'icky.dump/v1' },
-                { k: 'Updates', v: 'Replace on publish' },
+                { k: 'Updates', v: 'Same game → overwrite' },
               ].map((s) => (
                 <div key={s.k}>
                   <dt className="text-[11px] uppercase tracking-wider text-dim">{s.k}</dt>
@@ -82,13 +82,13 @@ export function Home() {
             {[
               {
                 icon: Database,
-                title: 'Single live dump',
-                body: 'Only one game is published at a time. Re-upload to overwrite offsets after a patch.',
+                title: 'One entry per game',
+                body: 'Catalog keys on game slug. Re-upload AVF2 and the old dump is replaced — not duplicated.',
               },
               {
                 icon: Upload,
                 title: 'Drop → issue → live',
-                body: 'Validate in the browser, attach to a GitHub issue. The bot updates the site automatically.',
+                body: 'Validate in the browser, attach to a GitHub issue. The bot adds or updates automatically.',
               },
               {
                 icon: Shield,

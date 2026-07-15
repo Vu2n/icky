@@ -1,4 +1,4 @@
-# Single-game catalog: each valid dump submission REPLACES the dump on the site.
+# Multi-game catalog: new games are added; same game.slug REPLACES the existing dump.
 name: Process dump submission
 
 on:
@@ -94,7 +94,7 @@ jobs:
           print("OK slug=", slug, "types=", (dump.get("stats") or {}).get("types"))
           PY
 
-      - name: Replace single-game catalog
+      - name: Upsert dump in catalog
         id: patch
         run: |
           set -euo pipefail
@@ -103,17 +103,23 @@ jobs:
           echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
           echo "game=$GAME" >> "$GITHUB_OUTPUT"
 
-          # Wipe every previous dump folder — only one game lives on the site
-          rm -rf web/public/dumps
           mkdir -p "web/public/dumps/$SLUG"
+          # Overwrite dump.json for this slug (update path)
           cp /tmp/icky-dump/dump.json "web/public/dumps/$SLUG/dump.json"
 
           python3 - <<'PY'
           import json
           from pathlib import Path
           from datetime import datetime, timezone
-          meta=json.load(open("/tmp/icky-dump/meta.json"))
-          entry={
+
+          meta = json.load(open("/tmp/icky-dump/meta.json"))
+          cat_path = Path("web/public/dumps/catalog.json")
+          if cat_path.exists():
+              cat = json.loads(cat_path.read_text(encoding="utf-8"))
+          else:
+              cat = {"schema": "icky.catalog/v1", "dumps": []}
+
+          entry = {
             "slug": meta["slug"],
             "game": meta["game"],
             "executable": meta["executable"],
@@ -122,26 +128,33 @@ jobs:
             "mode": meta["mode"],
             "generated_at": meta["generated_at"],
             "stats": {
-              "types": meta.get("stats",{}).get("types",0),
-              "classes": meta.get("stats",{}).get("classes"),
-              "globals": meta.get("stats",{}).get("globals",0),
-              "packages": meta.get("stats",{}).get("packages"),
+              "types": meta.get("stats", {}).get("types", 0),
+              "classes": meta.get("stats", {}).get("classes"),
+              "globals": meta.get("stats", {}).get("globals", 0),
+              "packages": meta.get("stats", {}).get("packages"),
             },
             "path": f"dumps/{meta['slug']}/dump.json",
-            "featured": True,
-            "tags": [meta["engine"], meta["mode"], "current"],
+            "featured": False,
+            "tags": [meta["engine"], meta["mode"], "community"],
           }
-          cat={
-            "schema": "icky.catalog/v1",
-            "mode": "single-game",
-            "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "dumps": [entry],  # exactly one
-          }
-          Path("web/public/dumps/catalog.json").write_text(
-              json.dumps(cat, indent=2) + "\n", encoding="utf-8"
-          )
-          print("catalog set to single game:", meta["slug"])
+
+          dumps = cat.get("dumps") or []
+          existed = any(d.get("slug") == meta["slug"] for d in dumps)
+          # Same game slug → replace entry; keep others
+          dumps = [d for d in dumps if d.get("slug") != meta["slug"]]
+          dumps.insert(0, entry)
+
+          cat["schema"] = "icky.catalog/v1"
+          cat.pop("mode", None)  # remove single-game mode if present
+          cat["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+          cat["dumps"] = dumps
+          cat_path.write_text(json.dumps(cat, indent=2) + "\n", encoding="utf-8")
+
+          action = "updated" if existed else "added"
+          Path("/tmp/icky-dump/action.txt").write_text(action)
+          print(f"catalog: {action} {meta['slug']} ({len(dumps)} games total)")
           PY
+          echo "action=$(cat /tmp/icky-dump/action.txt)" >> "$GITHUB_OUTPUT"
 
       - name: Commit & push to main
         run: |
@@ -153,7 +166,9 @@ jobs:
             echo "No file changes"
             exit 0
           fi
-          git commit -m "dump: set current game to ${{ steps.patch.outputs.slug }} (#${{ github.event.issue.number }})"
+          ACT="${{ steps.patch.outputs.action }}"
+          SLUG="${{ steps.patch.outputs.slug }}"
+          git commit -m "dump: ${ACT} ${SLUG} (#${{ github.event.issue.number }})"
           git push origin HEAD:main
 
       - name: Comment on issue
@@ -164,13 +179,18 @@ jobs:
             const outcome = '${{ job.status }}'
             const slug = '${{ steps.patch.outputs.slug }}'
             const game = '${{ steps.patch.outputs.game }}'
+            const action = '${{ steps.patch.outputs.action }}'
             let body
             if (outcome === 'success') {
-              body = `✅ **${game || slug || 'Dump'}** is now the live dump on the site (replaces any previous game).\n\n` +
-                `Catalog: https://${context.repo.owner.toLowerCase()}.github.io/${context.repo.repo}/#/dumps\n\n` +
+              const verb = action === 'updated' ? 'updated' : 'added'
+              body = `✅ **${game || slug}** was **${verb}** in the catalog.\n\n` +
+                (action === 'updated'
+                  ? `An existing dump for this game was replaced with the new offsets.\n\n`
+                  : `This is a new game entry on the site.\n\n`) +
+                `View: https://${context.repo.owner.toLowerCase()}.github.io/${context.repo.repo}/#/dump/${slug}\n\n` +
                 `Thanks @${context.payload.issue.user.login}!`
             } else {
-              body = `❌ Could not update the live dump.\n\n` +
+              body = `❌ Could not ingest this dump.\n\n` +
                 `Attach \`icky.dump.json\` (schema \`icky.dump/v1\`) and try again.\n` +
                 `Logs: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions`
             }

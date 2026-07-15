@@ -38,10 +38,12 @@ export function Docs() {
     ...`}
         </pre>
 
-        <h2 className="pt-4 font-display text-lg font-semibold text-text">Single-game catalog</h2>
+        <h2 className="pt-4 font-display text-lg font-semibold text-text">Upsert by game</h2>
         <p>
-          The public site always has <strong className="text-text">0 or 1</strong> dump. Publishing
-          wipes the previous game folder and writes the new one, then deploys.
+          Catalog entries are keyed by <code className="text-accent">game.slug</code>. Publishing a
+          dump for a slug that already exists overwrites{' '}
+          <code className="text-dim">dumps/&#123;slug&#125;/dump.json</code> and refreshes the
+          catalog row. Other games are left alone.
         </p>
 
         <h2 className="pt-4 font-display text-lg font-semibold text-text">Easiest publish path</h2>
@@ -53,7 +55,7 @@ export function Docs() {
           <li>
             Click <strong className="text-text">Download &amp; open issue</strong>
           </li>
-          <li>Drag the file onto the GitHub issue and submit — bot replaces the live dump</li>
+          <li>Drag the file onto the GitHub issue and submit — bot adds or updates that game</li>
         </ol>
 
         <h2 className="pt-4 font-display text-lg font-semibold text-text">Full docs</h2>
