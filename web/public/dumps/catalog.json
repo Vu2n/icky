@@ -1,0 +1,24 @@
+{
+  "schema": "icky.catalog/v1",
+  "updated_at": "2026-07-15T00:00:00Z",
+  "dumps": [
+    {
+      "slug": "avf2-win64-shipping",
+      "game": "AVF2",
+      "executable": "AVF2-Win64-Shipping.exe",
+      "engine": "unreal",
+      "engine_label": "Unreal Engine",
+      "mode": "internal",
+      "generated_at": "2026-07-15T12:00:00Z",
+      "stats": {
+        "types": 12,
+        "classes": 6,
+        "globals": 5,
+        "packages": 3
+      },
+      "path": "dumps/avf2-win64-shipping/dump.json",
+      "featured": true,
+      "tags": ["unreal", "shipping", "sample"]
+    }
+  ]
+}

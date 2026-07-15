@@ -1,0 +1,48 @@
+# Build outputs
+build/
+out/
+cmake-build-*/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/*.vcxproj*
+**/*.sln
+**/cmake_install.cmake
+**/install_manifest.txt
+
+# Binaries
+*.dll
+*.exe
+*.lib
+*.pdb
+*.obj
+*.o
+*.a
+*.so
+*.dylib
+*.exp
+
+# IDE
+.vs/
+.idea/
+*.user
+*.suo
+*.swp
+
+# Dumper runtime output
+sdk_out/
+icky_sdk_*/
+**/icky_sdk_*/
+
+# Node / web
+web/node_modules/
+web/dist/
+**/node_modules/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Env / secrets
+.env
+.env.*
+*.pem
